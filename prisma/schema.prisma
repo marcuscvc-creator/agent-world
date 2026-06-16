@@ -1,0 +1,568 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum AgentStatus {
+  IDLE
+  THINKING
+  WORKING
+  WAITING_APPROVAL
+  EXECUTING
+  BLOCKED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  MODIFICATION_REQUESTED
+  EXECUTED
+}
+
+enum TaskStatus {
+  QUEUED
+  IN_PROGRESS
+  WAITING_APPROVAL
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+enum ApprovalChannel {
+  SLACK
+}
+
+enum SlackMessageType {
+  APPROVAL_REQUIRED
+  PREVIEW_ONLY
+  EXECUTED
+  BLOCKED
+  NEEDS_MODIFICATION
+  REVENUE_UPDATE
+  AGENT_REPORT
+}
+
+enum PreviewItemType {
+  EMAIL_SCRIPT
+  AD_COPY
+  SOCIAL_POST_DRAFT
+  LANDING_PAGE_COPY
+  PRODUCT_DESCRIPTION
+  OFFER_PRESENTATION
+  SALES_SCRIPT
+  CONTENT_CALENDAR
+  COLD_DM_SCRIPT
+}
+
+enum AgentActionStatus {
+  DRAFTED
+  PREVIEW_SENT
+  PENDING_APPROVAL
+  EXECUTED
+  BLOCKED
+}
+
+enum IntegrationStatus {
+  CONNECTED
+  NOT_CONNECTED
+  NEEDS_CONFIGURATION
+  FAILED
+}
+
+enum TestStatus {
+  NOT_TESTED
+  PASSED
+  FAILED
+}
+
+enum ExecutionMode {
+  DEMO
+  LOCAL
+  SUPERVISED_LIVE
+  PRODUCTION
+  SANDBOX
+  SUPERVISED
+  LIVE
+}
+
+enum SpendingRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  MODIFICATION_REQUESTED
+}
+
+enum ExternalActionStatus {
+  SUCCESS
+  FAILED
+  BLOCKED
+  MOCKED
+}
+
+model Agent {
+  id               String      @id @default(cuid())
+  name             String
+  role             String
+  personality      String
+  memory           Json        @default("[]")
+  goals            Json        @default("[]")
+  taskQueue        Json        @default("[]")
+  currentGoal      String
+  currentTask      String
+  status           AgentStatus @default(IDLE)
+  locationX        Int
+  locationY        Int
+  revenueInfluenced Decimal     @default(0) @db.Decimal(12, 2)
+  costIncurred     Decimal     @default(0) @db.Decimal(12, 2)
+  riskLevel        RiskLevel   @default(LOW)
+  approvalRequired Boolean     @default(false)
+  performanceHistory Json      @default("[]")
+  trustScore       Int         @default(90)
+  complianceScore  Int         @default(90)
+  customerSatisfactionScore Int @default(90)
+  spamRiskScore    Int         @default(10)
+  brandSafetyScore Int         @default(90)
+  reliabilityScore Int         @default(90)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  tasks            Task[]
+  logs             AgentLog[]
+  approvals        ApprovalRequest[]
+  previewItems     PreviewItem[]
+  slackMessages    SlackMessage[]
+  actions          AgentAction[]
+  sentCommunications AgentCommunication[] @relation("SentAgentComms")
+  receivedCommunications AgentCommunication[] @relation("ReceivedAgentComms")
+  ownedBusinesses  Business[]
+  spendingRequests SpendingRequest[]
+  externalActions  ExternalActionLog[]
+  memories         AgentMemory[]
+  thoughts         AgentThought[]
+}
+
+model Business {
+  id             String   @id @default(cuid())
+  name           String
+  niche          String
+  businessModel  String
+  ownerAgentId   String
+  status         String
+  stage          String
+  revenue        Decimal  @default(0) @db.Decimal(12, 2)
+  expenses       Decimal  @default(0) @db.Decimal(12, 2)
+  profit         Decimal  @default(0) @db.Decimal(12, 2)
+  growthRate     Decimal  @default(0) @db.Decimal(6, 2)
+  traffic        Int      @default(0)
+  leads          Int      @default(0)
+  conversionRate Decimal  @default(0) @db.Decimal(5, 2)
+  products       Json     @default("[]")
+  websites       Json     @default("[]")
+  campaigns      Json     @default("[]")
+  riskScore      Int      @default(0)
+  reputationScore Int     @default(90)
+  trustScore     Int      @default(90)
+  customerSatisfactionScore Int @default(90)
+  brandScore     Int      @default(90)
+  complaintCount Int      @default(0)
+  refundRate     Decimal  @default(0) @db.Decimal(5, 2)
+  spamRiskScore  Int      @default(10)
+  complianceScore Int     @default(90)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  ownerAgent     Agent    @relation(fields: [ownerAgentId], references: [id])
+}
+
+model AgentCommunication {
+  id          String   @id @default(cuid())
+  fromAgentId String
+  toAgentId   String
+  message     String
+  outcome     String
+  createdAt   DateTime @default(now())
+
+  fromAgent   Agent    @relation("SentAgentComms", fields: [fromAgentId], references: [id])
+  toAgent     Agent    @relation("ReceivedAgentComms", fields: [toAgentId], references: [id])
+}
+
+model Task {
+  id              String     @id @default(cuid())
+  agentId         String
+  title           String
+  goal            String
+  status          TaskStatus @default(QUEUED)
+  toolUsed        String?
+  result          String?
+  approvalNeeded Boolean    @default(false)
+  revenueImpact   Decimal    @default(0) @db.Decimal(12, 2)
+  costImpact      Decimal    @default(0) @db.Decimal(12, 2)
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  agent           Agent      @relation(fields: [agentId], references: [id])
+  logs            AgentLog[]
+  approvals       ApprovalRequest[]
+}
+
+model AgentLog {
+  id             String   @id @default(cuid())
+  agentId        String
+  taskId         String?
+  message        String
+  rationale      String
+  toolUsed       String?
+  result         String?
+  approvalNeeded Boolean  @default(false)
+  revenueImpact  Decimal  @default(0) @db.Decimal(12, 2)
+  costImpact     Decimal  @default(0) @db.Decimal(12, 2)
+  createdAt      DateTime @default(now())
+
+  agent          Agent    @relation(fields: [agentId], references: [id])
+  task           Task?    @relation(fields: [taskId], references: [id])
+}
+
+model ApprovalRequest {
+  id                  String         @id @default(cuid())
+  agentId             String
+  taskId              String?
+  actionType          String
+  title               String?
+  summary             String?
+  proposedAction      String
+  reason              String
+  riskLevel           RiskLevel
+  requiresApproval    Boolean        @default(true)
+  previewOnly         Boolean        @default(false)
+  channel             ApprovalChannel @default(SLACK)
+  expectedUpside      String
+  downside            String
+  exactExecution      String
+  executionPlanJson   Json?
+  previewLink         String?
+  contentPreview      String?
+  status              ApprovalStatus @default(PENDING)
+  slackTs             String?
+  slackMessageTs      String?
+  slackChannelId      String?
+  humanResponse       String?
+  requestedAt         DateTime       @default(now())
+  resolvedAt          DateTime?
+  executedAt          DateTime?
+
+  agent               Agent          @relation(fields: [agentId], references: [id])
+  task                Task?          @relation(fields: [taskId], references: [id])
+  slackMessages       SlackMessage[]
+  actions             AgentAction[]
+}
+
+model IntegrationConnection {
+  id              String            @id @default(cuid())
+  provider        String
+  status          IntegrationStatus @default(NOT_CONNECTED)
+  mode            String
+  connectedAt     DateTime?
+  lastTestedAt    DateTime?
+  lastTestStatus  TestStatus        @default(NOT_TESTED)
+  lastError       String?
+  metadataJson    Json              @default("{}")
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+}
+
+model ExternalActionLog {
+  id                  String               @id @default(cuid())
+  provider            String
+  actionType          String
+  agentId             String?
+  status              ExternalActionStatus
+  requestPayloadJson  Json                 @default("{}")
+  responsePayloadJson Json?
+  errorMessage        String?
+  createdAt           DateTime             @default(now())
+
+  agent               Agent?               @relation(fields: [agentId], references: [id])
+}
+
+model SpendingRequest {
+  id                    String                @id @default(cuid())
+  requestingAgentId      String
+  amount                Decimal               @db.Decimal(12, 2)
+  reason                String
+  category              String
+  expectedReturn        String
+  expectedPaybackTime   String
+  freeAlternativesTried Json                  @default("[]")
+  riskLevel             RiskLevel
+  urgency               String
+  status                SpendingRequestStatus @default(PENDING)
+  slackMessageTs        String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  requestingAgent       Agent                 @relation(fields: [requestingAgentId], references: [id])
+}
+
+model CapitalAccount {
+  id                  String   @id @default(cuid())
+  availableCapital    Decimal  @default(0) @db.Decimal(12, 2)
+  generatedRevenue    Decimal  @default(0) @db.Decimal(12, 2)
+  approvedUserFunding Decimal  @default(0) @db.Decimal(12, 2)
+  reinvestmentBudget  Decimal  @default(0) @db.Decimal(12, 2)
+  requestedSpending   Decimal  @default(0) @db.Decimal(12, 2)
+  approvedSpending    Decimal  @default(0) @db.Decimal(12, 2)
+  rejectedSpending    Decimal  @default(0) @db.Decimal(12, 2)
+  currentExpenses     Decimal  @default(0) @db.Decimal(12, 2)
+  netProfit           Decimal  @default(0) @db.Decimal(12, 2)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model PreviewItem {
+  id              String          @id @default(cuid())
+  agentId         String
+  title           String
+  type            PreviewItemType
+  content         String
+  destination     String
+  previewOnly     Boolean         @default(true)
+  holdRequested   Boolean         @default(false)
+  sentToSlackAt   DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  agent           Agent           @relation(fields: [agentId], references: [id])
+  slackMessages   SlackMessage[]
+  actions         AgentAction[]
+}
+
+model SlackMessage {
+  id                String           @id @default(cuid())
+  type              SlackMessageType
+  agentId           String?
+  approvalRequestId String?
+  previewItemId     String?
+  channelId         String
+  ts                String
+  title             String
+  body              String
+  statusBadge       String
+  createdAt         DateTime         @default(now())
+
+  agent             Agent?           @relation(fields: [agentId], references: [id])
+  approvalRequest   ApprovalRequest? @relation(fields: [approvalRequestId], references: [id])
+  previewItem       PreviewItem?     @relation(fields: [previewItemId], references: [id])
+}
+
+model NotificationPreference {
+  id                String          @id @default(cuid())
+  channel           ApprovalChannel @default(SLACK)
+  slackChannelId    String
+  approvalRequired  Boolean         @default(true)
+  previewOnly       Boolean         @default(true)
+  revenueUpdates    Boolean         @default(true)
+  agentReports      Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+}
+
+model AgentAction {
+  id                String            @id @default(cuid())
+  agentId           String
+  approvalRequestId String?
+  previewItemId     String?
+  actionType        String
+  title             String
+  riskLevel         RiskLevel
+  requiresApproval  Boolean
+  previewOnly       Boolean
+  status            AgentActionStatus @default(DRAFTED)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  agent             Agent             @relation(fields: [agentId], references: [id])
+  approvalRequest   ApprovalRequest?  @relation(fields: [approvalRequestId], references: [id])
+  previewItem       PreviewItem?      @relation(fields: [previewItemId], references: [id])
+}
+
+model BusinessIdea {
+  id             String    @id @default(cuid())
+  title          String
+  niche          String
+  businessModel  String
+  category       String
+  marketDemand   Int
+  competition    Int
+  startupCost    Decimal   @db.Decimal(12, 2)
+  timeToRevenue  String
+  timeToFirstDollar String
+  complianceRisk RiskLevel
+  scalability    Int
+  demandScore    Int
+  competitionScore Int
+  scalabilityScore Int
+  riskScore      Int
+  reputationRiskScore Int
+  complianceRiskScore Int
+  probabilityOfRevenue Int
+  canStartForZero Boolean @default(true)
+  expectedProfit Decimal   @db.Decimal(12, 2)
+  pathToFirstDollar String
+  expectedTimeToFirstDollar String
+  minimumViableOffer String
+  firstCustomerStrategy String
+  validationMethod String
+  freeDistributionPlan String
+  rationale      String
+  status         String    @default("proposed")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  products       Product[]
+  websites       Website[]
+  campaigns      Campaign[]
+}
+
+model Product {
+  id             String       @id @default(cuid())
+  businessIdeaId String?
+  name           String
+  description    String
+  price          Decimal      @db.Decimal(12, 2)
+  status         String       @default("draft")
+  launchApproval ApprovalStatus?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  businessIdea   BusinessIdea? @relation(fields: [businessIdeaId], references: [id])
+}
+
+model Website {
+  id             String       @id @default(cuid())
+  businessIdeaId String?
+  name           String
+  domain         String?
+  status         String       @default("draft")
+  copy           String
+  launchApproval ApprovalStatus?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  businessIdea   BusinessIdea? @relation(fields: [businessIdeaId], references: [id])
+}
+
+model Campaign {
+  id             String        @id @default(cuid())
+  businessIdeaId String?
+  name           String
+  channel        String
+  status         String        @default("draft")
+  budget         Decimal       @default(0) @db.Decimal(12, 2)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  businessIdea   BusinessIdea? @relation(fields: [businessIdeaId], references: [id])
+  messages       OutreachMessage[]
+}
+
+model OutreachMessage {
+  id             String         @id @default(cuid())
+  campaignId     String?
+  recipient      String
+  channel        String
+  subject        String?
+  body           String
+  status         String         @default("draft")
+  approvalStatus ApprovalStatus?
+  sentAt         DateTime?
+  createdAt      DateTime       @default(now())
+
+  campaign       Campaign?      @relation(fields: [campaignId], references: [id])
+}
+
+model RevenueEvent {
+  id          String   @id @default(cuid())
+  source      String
+  amount      Decimal  @db.Decimal(12, 2)
+  stripeFee   Decimal  @default(0) @db.Decimal(12, 2)
+  refund      Decimal  @default(0) @db.Decimal(12, 2)
+  sandbox     Boolean  @default(true)
+  occurredAt  DateTime @default(now())
+}
+
+model ExpenseEvent {
+  id          String   @id @default(cuid())
+  category    String
+  amount      Decimal  @db.Decimal(12, 2)
+  reason      String
+  approved    Boolean  @default(false)
+  occurredAt  DateTime @default(now())
+}
+
+model WorldState {
+  id               String   @id @default(cuid())
+  grossRevenue     Decimal  @default(0) @db.Decimal(12, 2)
+  netRevenue       Decimal  @default(0) @db.Decimal(12, 2)
+  mrr              Decimal  @default(0) @db.Decimal(12, 2)
+  arr              Decimal  @default(0) @db.Decimal(12, 2)
+  expenses         Decimal  @default(0) @db.Decimal(12, 2)
+  profit           Decimal  @default(0) @db.Decimal(12, 2)
+  stage            String   @default("campsite")
+  websitesLaunched Int      @default(0)
+  productsLaunched Int      @default(0)
+  businesses       Int      @default(0)
+  leads            Int      @default(0)
+  traffic          Int      @default(0)
+  conversionRate   Decimal  @default(0) @db.Decimal(5, 2)
+  executionMode    ExecutionMode @default(SUPERVISED_LIVE)
+  updatedAt        DateTime @updatedAt
+}
+
+// --- New models added in Phase 1 rebuild ---
+
+model AgentMemory {
+  id        String   @id @default(cuid())
+  agentId   String
+  type      String   // "observation" | "decision" | "learning" | "goal"
+  content   String
+  relevance Int      @default(50)
+  createdAt DateTime @default(now())
+
+  agent     Agent    @relation(fields: [agentId], references: [id])
+}
+
+model AgentThought {
+  id         String   @id @default(cuid())
+  agentId    String
+  taskId     String?
+  prompt     String
+  reasoning  String
+  toolCalls  Json     @default("[]")
+  tokensUsed Int      @default(0)
+  costUsd    Decimal  @default(0) @db.Decimal(8, 6)
+  createdAt  DateTime @default(now())
+
+  agent      Agent    @relation(fields: [agentId], references: [id])
+}
+
+model WorldClock {
+  id        String   @id @default(cuid())
+  dayNumber Int      @default(1)
+  timeOfDay Float    @default(0.5)
+  updatedAt DateTime @updatedAt
+}

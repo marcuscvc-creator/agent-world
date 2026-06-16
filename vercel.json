@@ -1,0 +1,24 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "pnpm prisma:generate && pnpm build",
+  "installCommand": "pnpm install",
+  "regions": ["iad1"],
+  "crons": [
+    {
+      "path": "/api/agent-tick",
+      "schedule": "0 * * * *"
+    }
+  ],
+  "env": {
+    "EXECUTION_MODE": "supervised_live",
+    "ALLOW_REAL_WORLD_ACTIONS": "true",
+    "REQUIRE_HUMAN_APPROVAL": "true",
+    "ALLOW_WEB_SEARCH": "true",
+    "REQUIRE_APPROVAL_FOR_WEB_SEARCH": "true",
+    "OPENAI_MONTHLY_BUDGET": "10",
+    "MAX_AGENT_RUNS_PER_DAY": "20",
+    "MAX_WEB_SEARCHES_PER_DAY": "5",
+    "MAX_DAILY_SPEND_WITHOUT_APPROVAL": "0",
+    "STRIPE_MODE": "test"
+  }
+}

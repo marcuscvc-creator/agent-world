@@ -1,0 +1,10 @@
+.env
+.env*.local
+.vercel
+.next
+node_modules
+*.log
+.DS_Store
+work/pnpm.tgz
+work/pnpm.js
+work/pnpm-current
