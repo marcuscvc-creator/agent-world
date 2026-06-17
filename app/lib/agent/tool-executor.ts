@@ -7,7 +7,7 @@
 import { getPrismaClient } from "../prisma";
 import { writeMemory } from "./memory";
 import { logRevenue, logExpense } from "../finance/ledger";
-import { sendSlackApprovalMessage, sendSlackDraftPreview } from "../integrations";
+import { sendSlackApprovalMessage } from "../integrations";
 
 export type ToolCallArgs = Record<string, unknown>;
 
@@ -275,26 +275,7 @@ async function execDraftContent(agentId: string, args: ToolCallArgs): Promise<To
     },
   });
 
-  // Send rich Slack preview + DALL-E concept image (non-blocking)
-  try {
-    const agentRecord = await prisma.agent.findUnique({ where: { id: agentId }, select: { name: true } });
-    const slackResult = await sendSlackDraftPreview({
-      agentName: agentRecord?.name ?? "Agent",
-      title,
-      type,
-      content,
-      destination,
-      draftId: item.id,
-    });
-    if (slackResult.ok) {
-      await prisma.previewItem.update({
-        where: { id: item.id },
-        data: { sentToSlackAt: new Date() },
-      });
-    }
-  } catch {
-    // Slack delivery failure is non-fatal
-  }
+  // Slack draft previews are disabled — only HIGH/CRITICAL approvals notify Slack.
 
   return {
     toolName: "draft_content",
