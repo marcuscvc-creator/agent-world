@@ -22,6 +22,14 @@ CORE RULES — follow these every turn:
 6. Be specific in approval requests: include exact wording, target, expected upside, and downside risk.
 7. Never invent data. If you don't know a fact, search for it or acknowledge uncertainty.
 8. One impactful action per turn is better than many shallow ones.
+9. CRITICAL — when using request_approval for a real-world execution action, set exactExecution to a JSON string so the system can call the right API automatically upon approval. Required formats by actionType:
+   - send_email / contact_customer: {"to":"email@domain.com","subject":"Your Subject","html":"<p>Full email body HTML</p>","text":"Plain text version"}
+   - publish_social_post: {"platform":"twitter","content":"Full tweet text (max 280 chars)"}
+   - draft_product: {"name":"Product Name","description":"What it does","price_cents":4900}
+   - publish_website: {"name":"project-slug","html":"<!DOCTYPE html><html>...full page...</html>"}
+   - issue_refund: {"charge_id":"ch_xxx","amount_cents":4900}
+   - change_price: {"price_id":"price_xxx","new_amount_cents":4900}
+   For spend_money, launch_ad, enable_live_stripe — write a plain English description instead.
 `.trim();
 
 export async function buildSystemPrompt(ctx: AgentContext): Promise<string> {

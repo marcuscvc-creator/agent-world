@@ -14,7 +14,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { triggerAgentRun } from "@/app/actions/runAgents";
+import { triggerAgentRun, triggerNextAgent } from "@/app/actions/runAgents";
 import { PixelWorld } from "./PixelWorld";
 import type { Agent, Building, ApprovalRequest, ApprovalStatus } from "@/app/lib/types";
 
@@ -109,14 +109,29 @@ export function AgentWorldApp() {
   async function handleRunAgents(agentId?: string) {
     setAgentRunning(true);
     try {
-      const result = await triggerAgentRun(agentId);
-      if ("agentsRun" in result) {
+      if (agentId) {
+        // Run one specific agent
+        const result = await triggerAgentRun(agentId);
         showToast(
-          `${result.agentsRun} agent${result.agentsRun !== 1 ? "s" : ""} ran · $${result.totalCostUsd.toFixed(4)} · ${result.approvalsQueued} approval${result.approvalsQueued !== 1 ? "s" : ""} queued`,
-          result.errors.length > 0 ? "warn" : "good"
+          result.error ? `Error: ${result.error}` : `${agentId} ran · $${result.costUsd.toFixed(4)}`,
+          result.error ? "warn" : "good"
         );
       } else {
-        showToast(result.error ? `Error: ${result.error}` : `Agent ran · $${result.costUsd.toFixed(4)}`, result.error ? "warn" : "good");
+        // Cycle through all agents one at a time (Vercel Hobby: 10s limit per call)
+        const AGENT_COUNT = 8;
+        let ran = 0;
+        let totalCost = 0;
+        for (let i = 0; i < AGENT_COUNT; i++) {
+          const result = await triggerNextAgent();
+          if ("skipped" in result) break; // no more IDLE agents
+          ran++;
+          totalCost += result.costUsd ?? 0;
+          await new Promise((r) => setTimeout(r, 300)); // brief pause between calls
+        }
+        showToast(
+          ran > 0 ? `${ran} agent${ran !== 1 ? "s" : ""} ran · $${totalCost.toFixed(4)}` : "No IDLE agents to run",
+          ran > 0 ? "good" : "warn"
+        );
       }
       await fetchAll();
     } catch (err) {

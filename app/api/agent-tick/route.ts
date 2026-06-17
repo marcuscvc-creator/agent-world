@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getPrismaClient } from "@/app/lib/prisma";
 import { getExecutionMode, getIntegrationConnections, getStripeMode } from "@/app/lib/integrations";
 import { getAgentWorldConfig } from "@/app/lib/config";
-import { runAgentLoop, runSingleAgent } from "@/app/lib/agent/runner";
+import { runNextAgent, runSingleAgent } from "@/app/lib/agent/runner";
 
 export const dynamic = "force-dynamic";
 
@@ -112,6 +112,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, mode: "single", result });
   }
 
-  const result = await runAgentLoop({ agentIds: body.agentIds });
-  return NextResponse.json({ ok: true, mode: "loop", result });
+  // Default: run ONE agent (oldest IDLE by updatedAt) — stays under Vercel Hobby 10s limit.
+  // The client calls this endpoint up to 8× to cycle through all agents.
+  const result = await runNextAgent();
+  return NextResponse.json({ ok: true, mode: "single-next", result });
 }

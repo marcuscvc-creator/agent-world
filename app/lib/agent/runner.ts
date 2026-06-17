@@ -130,3 +130,26 @@ export async function runAgentLoop(options?: { agentIds?: string[] }): Promise<R
 export async function runSingleAgent(agentId: string): Promise<ThinkResult> {
   return thinkAgentTurn(agentId);
 }
+
+/**
+ * Run the next IDLE agent in round-robin order (oldest updatedAt first).
+ * Designed for Vercel Hobby: one agent per call, stays under 10s timeout.
+ */
+export async function runNextAgent(): Promise<
+  (ThinkResult & { agentId: string; agentName: string }) | { skipped: true; reason: string }
+> {
+  const prisma = getPrismaClient();
+  if (!prisma) return { skipped: true, reason: "Database not connected." };
+  if (!process.env.OPENAI_API_KEY) return { skipped: true, reason: "OPENAI_API_KEY not set." };
+
+  const agent = await prisma.agent.findFirst({
+    where: { status: "IDLE" },
+    orderBy: { updatedAt: "asc" },
+    select: { id: true, name: true },
+  });
+
+  if (!agent) return { skipped: true, reason: "No IDLE agents found." };
+
+  const result = await thinkAgentTurn(agent.id);
+  return { ...result, agentId: agent.id, agentName: agent.name };
+}
