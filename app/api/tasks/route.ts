@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getPrismaClient } from "@/app/lib/prisma";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const prisma = getPrismaClient();
   if (!prisma) return NextResponse.json({ tasks: [], error: "Database not connected." }, { status: 424 });

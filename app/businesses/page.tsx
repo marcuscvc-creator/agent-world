@@ -1,6 +1,8 @@
 import { getPrismaClient } from "@/app/lib/prisma";
 import { PageHeader, Badge, StatCard, EmptyState, money } from "@/app/components/ui";
 
+export const dynamic = "force-dynamic";
+
 function deriveHealth(b: { trustScore: number; complianceScore: number; spamRiskScore: number; reputationScore: number }) {
   const score = (b.trustScore + b.complianceScore + b.reputationScore) / 3 - b.spamRiskScore * 0.5;
   if (score >= 85) return { label: "growing", tone: "good" as const };

@@ -4,6 +4,8 @@ import { getExecutionMode, getIntegrationConnections, getStripeMode } from "@/ap
 import { getAgentWorldConfig } from "@/app/lib/config";
 import { runAgentLoop, runSingleAgent } from "@/app/lib/agent/runner";
 
+export const dynamic = "force-dynamic";
+
 /**
  * GET /api/agent-tick
  * Returns a live snapshot of all world data for the dashboard.

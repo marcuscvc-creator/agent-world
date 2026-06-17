@@ -3,6 +3,8 @@ import { getIntegrationConnections } from "@/app/lib/integrations";
 import { getPrismaClient } from "@/app/lib/prisma";
 import { PageHeader, Panel, Badge, StatCard } from "@/app/components/ui";
 
+export const dynamic = "force-dynamic";
+
 const ENV_VARS = [
   { key: "DATABASE_URL",                     label: "Database",            group: "Core",        required: true },
   { key: "OPENAI_API_KEY",                   label: "OpenAI",              group: "Core",        required: true },

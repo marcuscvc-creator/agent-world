@@ -20,6 +20,8 @@
 import { NextResponse } from "next/server";
 import { getPrismaClient } from "@/app/lib/prisma";
 
+export const dynamic = "force-dynamic";
+
 function parseDecision(body: string): "approved" | "rejected" | "modification_requested" | "status" | null {
   const t = body.trim().toUpperCase();
   if (t === "YES" || t === "APPROVE") return "approved";

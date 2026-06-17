@@ -2,6 +2,8 @@ import { getPrismaClient } from "@/app/lib/prisma";
 import { PageHeader, StatCard, Panel, EmptyState, money } from "@/app/components/ui";
 import { getStageForRevenue, getNextStage } from "@/app/lib/world/stages";
 
+export const dynamic = "force-dynamic";
+
 type ThoughtRow = { id: string; agentId: string; tokensUsed: number; costUsd: unknown };
 
 export default async function AnalyticsPage() {

@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+
+export const dynamic = "force-dynamic";
 import { getAgentWorldConfig } from "@/app/lib/config";
 import { getPrismaClient } from "@/app/lib/prisma";
 import { getExecutionMode, getIntegrationConnections } from "@/app/lib/integrations";

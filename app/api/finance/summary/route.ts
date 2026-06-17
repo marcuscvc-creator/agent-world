@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getPLStatement, getBurnRate, getMonthlyData, getPLByAgent, getPLByBusiness } from "@/app/lib/finance/reports";
 import type { FinancialPeriod } from "@/app/lib/finance/reports";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const period = (searchParams.get("period") ?? "all") as FinancialPeriod;

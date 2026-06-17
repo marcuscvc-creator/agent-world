@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getAgentWorldConfig } from "@/app/lib/config";
 import { getExecutionMode, getIntegrationConnections, getStripeMode } from "@/app/lib/integrations";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const config = getAgentWorldConfig();
   const integrations = getIntegrationConnections();

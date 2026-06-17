@@ -3,6 +3,8 @@ import { PageHeader, StatCard, Panel, EmptyState, money, pct } from "@/app/compo
 import { getPLStatement, getBurnRate, getMonthlyData, getPLByAgent } from "@/app/lib/finance/reports";
 import { FinanceCharts } from "./FinanceCharts";
 
+export const dynamic = "force-dynamic";
+
 export default async function FinancePage({
   searchParams,
 }: {

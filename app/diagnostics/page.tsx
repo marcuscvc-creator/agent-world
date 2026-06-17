@@ -3,6 +3,8 @@ import { getAgentWorldConfig } from "@/app/lib/config";
 import { getPrismaClient } from "@/app/lib/prisma";
 import { getExecutionMode, getIntegrationConnections } from "@/app/lib/integrations";
 
+export const dynamic = "force-dynamic";
+
 const envChecks = [
   "SLACK_WEBHOOK_URL",
   "SLACK_BOT_TOKEN",

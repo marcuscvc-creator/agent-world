@@ -1,6 +1,8 @@
 import { getPrismaClient } from "@/app/lib/prisma";
 import { PageHeader, StatCard, Panel, EmptyState, money } from "@/app/components/ui";
 
+export const dynamic = "force-dynamic";
+
 export default async function RevenuePage() {
   const prisma = getPrismaClient();
 

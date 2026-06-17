@@ -2,6 +2,8 @@ import { getPrismaClient } from "@/app/lib/prisma";
 import { PageHeader, Badge, StatCard, EmptyState } from "@/app/components/ui";
 import { CreateTaskForm } from "./CreateTaskForm";
 
+export const dynamic = "force-dynamic";
+
 const COLUMNS = [
   { status: "QUEUED", label: "Queued", tone: "neutral" as const },
   { status: "IN_PROGRESS", label: "In Progress", tone: "info" as const },

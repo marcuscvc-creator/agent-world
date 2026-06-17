@@ -19,6 +19,8 @@ import { NextResponse } from "next/server";
 import { handleStripeWebhook } from "@/app/lib/integrations";
 import { logRevenue } from "@/app/lib/finance/ledger";
 
+export const dynamic = "force-dynamic";
+
 export const runtime = "nodejs"; // Required — Stripe needs raw body buffer
 
 export async function POST(request: Request) {

@@ -2,6 +2,8 @@ import { getPrismaClient } from "@/app/lib/prisma";
 import { PageHeader, Badge, StatCard, EmptyState, riskTone } from "@/app/components/ui";
 import { ApprovalQueue } from "./ApprovalQueue";
 
+export const dynamic = "force-dynamic";
+
 export default async function ApprovalsPage() {
   const prisma = getPrismaClient();
 

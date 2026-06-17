@@ -2,6 +2,8 @@ import { getPrismaClient } from "@/app/lib/prisma";
 import { PageHeader, Badge, Panel, StatCard, EmptyState, agentStatusTone } from "@/app/components/ui";
 import { AgentActions } from "./AgentActions";
 
+export const dynamic = "force-dynamic";
+
 type ThoughtRow = { id: string; agentId: string; reasoning: string; toolCalls: unknown; tokensUsed: number; costUsd: unknown; createdAt?: Date };
 type MemoryRow = { id: string; agentId: string };
 

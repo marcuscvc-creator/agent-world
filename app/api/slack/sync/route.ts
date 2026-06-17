@@ -3,6 +3,8 @@ import { getPrismaClient } from "@/app/lib/prisma";
 import { executeSandboxAction, sendSlackExecutedMessage } from "@/app/lib/integrations";
 import type { ApprovalStatus } from "@/app/lib/types";
 
+export const dynamic = "force-dynamic";
+
 type SlackMessage = {
   ts: string;
   text?: string;

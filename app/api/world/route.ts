@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getPrismaClient } from "@/app/lib/prisma";
 import { getStageForRevenue, revenueToNextStage } from "@/app/lib/world/stages";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const prisma = getPrismaClient();
 

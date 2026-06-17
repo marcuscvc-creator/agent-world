@@ -3,6 +3,8 @@ import { getPrismaClient } from "@/app/lib/prisma";
 import { writeMemory } from "@/app/lib/agent/memory";
 import type { MemoryType } from "@/app/lib/agent/memory";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: Request) {
   const prisma = getPrismaClient();
   if (!prisma) {

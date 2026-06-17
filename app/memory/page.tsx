@@ -1,6 +1,8 @@
 import { getPrismaClient } from "@/app/lib/prisma";
 import { PageHeader, Badge, StatCard, Panel, EmptyState } from "@/app/components/ui";
 
+export const dynamic = "force-dynamic";
+
 const typeTone: Record<string, "info" | "good" | "purple" | "warn"> = {
   observation: "info",
   learning: "good",
