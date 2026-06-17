@@ -194,8 +194,9 @@ export async function thinkAgentTurn(agentId: string): Promise<ThinkResult> {
       }).catch(() => null);
     }
 
-    // Set agent back to WORKING (or WAITING_APPROVAL if approval was queued)
-    const newStatus = approvalQueued ? "WAITING_APPROVAL" : "WORKING";
+    // Always return to IDLE after each turn — agents don't block on approvals.
+    // Approval requests are handled asynchronously by the human via the approvals UI.
+    const newStatus = "IDLE";
     await prisma.agent.update({
       where: { id: agentId },
       data: { status: newStatus },
