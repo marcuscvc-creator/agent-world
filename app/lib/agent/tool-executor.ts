@@ -230,10 +230,10 @@ async function execDraftContent(agentId: string, args: ToolCallArgs): Promise<To
     },
   });
 
-  // Send rich Slack preview (non-blocking — failure never stops the agent)
+  // Send rich Slack preview + DALL-E concept image (non-blocking)
   try {
     const agentRecord = await prisma.agent.findUnique({ where: { id: agentId }, select: { name: true } });
-    await sendSlackDraftPreview({
+    const slackResult = await sendSlackDraftPreview({
       agentName: agentRecord?.name ?? "Agent",
       title,
       type,
@@ -241,6 +241,12 @@ async function execDraftContent(agentId: string, args: ToolCallArgs): Promise<To
       destination,
       draftId: item.id,
     });
+    if (slackResult.ok) {
+      await prisma.previewItem.update({
+        where: { id: item.id },
+        data: { sentToSlackAt: new Date() },
+      });
+    }
   } catch {
     // Slack delivery failure is non-fatal
   }
