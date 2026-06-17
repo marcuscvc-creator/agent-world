@@ -81,11 +81,11 @@ export async function GET() {
  * Secured by CRON_SECRET header for Vercel cron jobs.
  */
 export async function POST(request: Request) {
-  // Allow Vercel cron or trusted callers via secret header
+  // Block callers that present a wrong CRON_SECRET, but allow browser POSTs (no auth header)
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     const auth = request.headers.get("authorization");
-    if (auth !== `Bearer ${cronSecret}`) {
+    if (auth !== null && auth !== `Bearer ${cronSecret}`) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }

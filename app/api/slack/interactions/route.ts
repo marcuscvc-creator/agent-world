@@ -181,11 +181,16 @@ export async function POST(request: Request) {
     });
   }
 
-  const body = (await request.json()) as {
+  let body: {
     type?: string;
     challenge?: string;
     event?: { text?: string; channel?: string; ts?: string; thread_ts?: string; bot_id?: string; subtype?: string };
   };
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ ok: true, ignored: "invalid_json" });
+  }
 
   if (body.type === "url_verification" && body.challenge) {
     return NextResponse.json({ challenge: body.challenge });
