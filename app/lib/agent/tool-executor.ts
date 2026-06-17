@@ -59,6 +59,57 @@ async function execRequestApproval(agentId: string, args: ToolCallArgs): Promise
     critical: "CRITICAL",
   };
 
+  const normalizedRisk = riskMap[riskLevel.toLowerCase()] ?? "MEDIUM";
+
+  // LOW and MEDIUM risk: auto-approve — no human queue needed.
+  // Only HIGH and CRITICAL require human sign-off.
+  if (normalizedRisk === "LOW" || normalizedRisk === "MEDIUM") {
+    await prisma.approvalRequest.create({
+      data: {
+        agentId,
+        actionType,
+        title,
+        summary,
+        proposedAction,
+        reason,
+        riskLevel: normalizedRisk,
+        expectedUpside,
+        downside,
+        exactExecution,
+        requiresApproval: false,
+        previewOnly: false,
+        status: "APPROVED", // Auto-approved
+      },
+    });
+
+    return {
+      toolName: "request_approval",
+      success: true,
+      approvalQueued: false,
+      output: `Auto-approved (${normalizedRisk} risk). Title: "${title}". No human review required for ${normalizedRisk} risk actions — proceed with execution.`,
+    };
+  }
+
+  // HIGH / CRITICAL: check for duplicate pending approval before creating a new one.
+  const existing = await prisma.approvalRequest.findFirst({
+    where: {
+      agentId,
+      title,
+      status: "PENDING",
+    },
+    select: { id: true },
+  });
+
+  if (existing) {
+    return {
+      toolName: "request_approval",
+      success: true,
+      approvalQueued: true,
+      approvalId: existing.id,
+      output: `Approval already pending (ID: ${existing.id}). Title: "${title}" is awaiting human review — do not re-submit. Focus on other tasks until it is resolved.`,
+    };
+  }
+
   const approval = await prisma.approvalRequest.create({
     data: {
       agentId,
@@ -67,7 +118,7 @@ async function execRequestApproval(agentId: string, args: ToolCallArgs): Promise
       summary,
       proposedAction,
       reason,
-      riskLevel: riskMap[riskLevel.toLowerCase()] ?? "MEDIUM",
+      riskLevel: normalizedRisk,
       expectedUpside,
       downside,
       exactExecution,
@@ -75,12 +126,6 @@ async function execRequestApproval(agentId: string, args: ToolCallArgs): Promise
       previewOnly: false,
       status: "PENDING",
     },
-  });
-
-  // Mark agent as waiting for approval
-  await prisma.agent.update({
-    where: { id: agentId },
-    data: { status: "WAITING_APPROVAL" },
   });
 
   // Attempt to send to Slack (non-blocking)
@@ -121,7 +166,7 @@ async function execRequestApproval(agentId: string, args: ToolCallArgs): Promise
     success: true,
     approvalQueued: true,
     approvalId: approval.id,
-    output: `Approval request queued (ID: ${approval.id}). Risk level: ${riskLevel}. Title: "${title}". Waiting for human review via Slack. You are now paused until this is resolved.`,
+    output: `Approval request queued (ID: ${approval.id}). Risk level: ${normalizedRisk} — human sign-off required. Title: "${title}". A Slack notification has been sent. Do not re-submit this request.`,
   };
 }
 

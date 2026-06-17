@@ -156,7 +156,11 @@ export async function runNextAgent(): Promise<
   }).catch(() => null);
 
   const agent = await prisma.agent.findFirst({
-    where: { status: "IDLE" },
+    where: {
+      status: "IDLE",
+      // Skip agents that have been manually paused (currentTask starts with "PAUSED")
+      NOT: { currentTask: { startsWith: "PAUSED" } },
+    },
     orderBy: { updatedAt: "asc" },
     select: { id: true, name: true },
   });
