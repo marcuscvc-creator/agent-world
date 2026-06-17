@@ -262,3 +262,172 @@ export async function executeSandboxAction(request: ApprovalRequest): Promise<Ex
     message: `Sandbox executed: ${request.exactExecution}`
   };
 }
+
+// ── Slack Draft Previews ─────────────────────────────────────────────────────
+
+/** Content types that also get a DALL-E concept image */
+const VISUAL_CONTENT_TYPES = new Set([
+  "email_script",
+  "ad_copy",
+  "social_post_draft",
+  "landing_page_copy",
+  "product_description",
+  "offer_presentation",
+  "cold_dm_script",
+]);
+
+const CONTENT_TYPE_LABELS: Record<string, string> = {
+  email_script: "📧 Email Draft",
+  ad_copy: "📣 Ad Copy",
+  social_post_draft: "📱 Social Post",
+  landing_page_copy: "🌐 Landing Page",
+  product_description: "📦 Product",
+  offer_presentation: "💰 Offer",
+  sales_script: "💬 Sales Script",
+  content_calendar: "📅 Content Calendar",
+  cold_dm_script: "✉️ Cold DM",
+};
+
+const DALLE_PROMPTS: Record<string, string> = {
+  ad_copy: 'Clean professional marketing ad visual. Modern bold graphic design, bright accent colors, business focused. No text, no words.',
+  social_post_draft: 'Eye-catching social media post background. Vibrant lifestyle photography feel, engaging composition. No text, no words.',
+  landing_page_copy: 'Minimal modern website hero image. Clean gradient background, professional product photography mood. No text, no words.',
+  email_script: 'Professional email marketing header visual. Clean corporate aesthetic, warm inviting tone. No text, no words.',
+  product_description: 'Clean product photography on white background. Studio lighting, premium quality feel. No text, no words.',
+  offer_presentation: 'Premium business offer visual. Bold high-contrast design, sense of value and urgency. No text, no words.',
+  cold_dm_script: 'Professional business handshake or connection visual. Trustworthy clean corporate. No text, no words.',
+};
+
+async function generateDraftImage(type: string, title: string): Promise<string | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || !VISUAL_CONTENT_TYPES.has(type)) return null;
+
+  const basePrompt = DALLE_PROMPTS[type] ?? "Professional business visual. Clean modern design. No text, no words.";
+  const prompt = `${basePrompt} Context: ${title.slice(0, 80)}.`;
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "dall-e-3",
+        prompt,
+        n: 1,
+        size: "1024x1024",
+        quality: "standard",
+        response_format: "url",
+      }),
+    });
+
+    if (!response.ok) return null;
+    const data = (await response.json()) as { data?: Array<{ url?: string }> };
+    return data.data?.[0]?.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function sendSlackDraftPreview(input: {
+  agentName: string;
+  title: string;
+  type: string;
+  content: string;
+  destination: string;
+  draftId: string;
+}): Promise<ExecutionResult> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  const channel = process.env.SLACK_CHANNEL_ID;
+
+  if (!token || !channel) {
+    return { ok: false, mode: "sandbox", message: "Slack not configured for draft previews." };
+  }
+
+  if (getExecutionMode() === "demo") {
+    return { ok: true, mode: "mocked", message: "Demo: Slack draft preview skipped.", slackTs: `sandbox-${Date.now()}`, slackChannelId: channel };
+  }
+
+  const typeLabel = CONTENT_TYPE_LABELS[input.type] ?? `📄 ${input.type}`;
+  const isVisual = VISUAL_CONTENT_TYPES.has(input.type);
+
+  // Generate concept image for visual content types
+  const imageUrl = isVisual ? await generateDraftImage(input.type, input.title) : null;
+
+  // Truncate content to 800 chars for the preview card
+  const preview = input.content.length > 800 ? input.content.slice(0, 800) + "…" : input.content;
+
+  const blocks: object[] = [
+    {
+      type: "header",
+      text: { type: "plain_text", text: `${typeLabel}: ${input.title}`, emoji: true },
+    },
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `*Agent:* ${input.agentName}  ·  *For:* ${input.destination}  ·  *Draft ID:* \`${input.draftId.slice(-8)}\``,
+        },
+      ],
+    },
+    { type: "divider" },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: `*Draft:*\n\`\`\`${preview}\`\`\`` },
+    },
+  ];
+
+  if (imageUrl) {
+    blocks.push({
+      type: "image",
+      image_url: imageUrl,
+      alt_text: `AI concept image for "${input.title}"`,
+      title: { type: "plain_text", text: "✨ AI Concept Image", emoji: true },
+    });
+  }
+
+  blocks.push(
+    { type: "divider" },
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `⏳ *Awaiting review* — nothing has been sent or published. Reply \`YES\` to approve, \`NO\` to reject, or \`MODIFY\` to request changes.`,
+        },
+      ],
+    }
+  );
+
+  try {
+    const response = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel,
+        text: `${typeLabel}: "${input.title}" by ${input.agentName} — awaiting your review`,
+        blocks,
+      }),
+    });
+
+    const json = (await response.json()) as { ok: boolean; error?: string; ts?: string; channel?: string };
+    if (!json.ok) {
+      return { ok: false, mode: "live-slack", message: `Slack draft preview failed: ${json.error}`, rawError: json.error };
+    }
+
+    return {
+      ok: true,
+      mode: "live-slack",
+      message: `Draft preview sent to Slack${imageUrl ? " with DALL-E concept image" : ""}.`,
+      slackTs: json.ts,
+      slackChannelId: json.channel,
+    };
+  } catch (error) {
+    return { ok: false, mode: "live-slack", message: "Draft Slack preview delivery failed.", rawError: maskError(error) };
+  }
+}

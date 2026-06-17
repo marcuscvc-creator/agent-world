@@ -7,7 +7,7 @@
 import { getPrismaClient } from "../prisma";
 import { writeMemory } from "./memory";
 import { logRevenue, logExpense } from "../finance/ledger";
-import { sendSlackApprovalMessage } from "../integrations";
+import { sendSlackApprovalMessage, sendSlackDraftPreview } from "../integrations";
 
 export type ToolCallArgs = Record<string, unknown>;
 
@@ -230,10 +230,25 @@ async function execDraftContent(agentId: string, args: ToolCallArgs): Promise<To
     },
   });
 
+  // Send rich Slack preview (non-blocking — failure never stops the agent)
+  try {
+    const agentRecord = await prisma.agent.findUnique({ where: { id: agentId }, select: { name: true } });
+    await sendSlackDraftPreview({
+      agentName: agentRecord?.name ?? "Agent",
+      title,
+      type,
+      content,
+      destination,
+      draftId: item.id,
+    });
+  } catch {
+    // Slack delivery failure is non-fatal
+  }
+
   return {
     toolName: "draft_content",
     success: true,
-    output: `Draft saved (ID: ${item.id}). Title: "${title}" (${type}). Destination: ${destination}. It is now in the human review queue — nothing has been sent. Write a memory note if you want to track this draft.`,
+    output: `Draft saved (ID: ${item.id}). Title: "${title}" (${type}). Destination: ${destination}. It is now in the human review queue — nothing has been sent. A Slack preview has been posted for your review. Write a memory note if you want to track this draft.`,
   };
 }
 
