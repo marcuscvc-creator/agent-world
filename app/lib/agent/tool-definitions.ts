@@ -207,6 +207,70 @@ export const AGENT_TOOLS: Tool[] = [
   {
     type: "function",
     function: {
+      name: "post_social_media",
+      description:
+        "Post content directly to a social media platform. LOW/MEDIUM risk posts (general updates, tips, announcements) execute immediately. HIGH risk posts (product launches, promotions with pricing) go to the approval inbox first. Twitter/X is connected — use it freely for brand building.",
+      parameters: {
+        type: "object",
+        required: ["platform", "content", "purpose", "riskLevel"],
+        properties: {
+          platform: {
+            type: "string",
+            enum: ["twitter", "x"],
+            description: "Social platform to post on. Currently: twitter/x.",
+          },
+          content: {
+            type: "string",
+            description: "The exact text to post. Max 280 chars for Twitter. No placeholder text — write the real post.",
+          },
+          purpose: {
+            type: "string",
+            description: "Why you're posting this and what outcome you expect",
+          },
+          riskLevel: {
+            type: "string",
+            enum: ["low", "medium", "high"],
+            description: "low = general/educational content, medium = brand announcements, high = product launches or promotions with pricing",
+          },
+        },
+      },
+    },
+  },
+
+  {
+    type: "function",
+    function: {
+      name: "deploy_website",
+      description:
+        "Deploy a complete HTML landing page or website to Vercel. Always requires human approval before going live — this action is irreversible and public-facing. Write the full HTML including styles inline. The deployed URL will be returned after approval.",
+      parameters: {
+        type: "object",
+        required: ["siteName", "htmlContent", "purpose"],
+        properties: {
+          siteName: {
+            type: "string",
+            description: "URL-safe name for the site (e.g. 'kids-resale-marketplace'). Lowercase, hyphens only.",
+          },
+          htmlContent: {
+            type: "string",
+            description: "Complete self-contained HTML for the page. Include all CSS inline or in a <style> tag. No external dependencies.",
+          },
+          purpose: {
+            type: "string",
+            description: "What this site is for and what business goal it serves",
+          },
+          estimatedRevenueImpact: {
+            type: "string",
+            description: "Expected business impact of deploying this page (e.g. 'capture email leads for product launch')",
+          },
+        },
+      },
+    },
+  },
+
+  {
+    type: "function",
+    function: {
       name: "write_memory",
       description:
         "Save a memory entry to your persistent memory store. Use this to record important decisions, learnings, goals, and observations so you can recall them in future turns.",

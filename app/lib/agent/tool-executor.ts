@@ -7,7 +7,7 @@
 import { getPrismaClient } from "../prisma";
 import { writeMemory } from "./memory";
 import { logRevenue, logExpense } from "../finance/ledger";
-import { sendSlackApprovalMessage } from "../integrations";
+import { sendSlackApprovalMessage, postToTwitter, deployToVercel, executeSandboxAction } from "../integrations";
 
 export type ToolCallArgs = Record<string, unknown>;
 
@@ -61,10 +61,10 @@ async function execRequestApproval(agentId: string, args: ToolCallArgs): Promise
 
   const normalizedRisk = riskMap[riskLevel.toLowerCase()] ?? "MEDIUM";
 
-  // LOW and MEDIUM risk: auto-approve — no human queue needed.
+  // LOW and MEDIUM risk: auto-approve AND auto-execute immediately.
   // Only HIGH and CRITICAL require human sign-off.
   if (normalizedRisk === "LOW" || normalizedRisk === "MEDIUM") {
-    await prisma.approvalRequest.create({
+    const record = await prisma.approvalRequest.create({
       data: {
         agentId,
         actionType,
@@ -78,15 +78,33 @@ async function execRequestApproval(agentId: string, args: ToolCallArgs): Promise
         exactExecution,
         requiresApproval: false,
         previewOnly: false,
-        status: "APPROVED", // Auto-approved
+        status: "APPROVED",
       },
     });
+
+    // Execute the action immediately — no human needed for LOW/MEDIUM
+    const agentRecord = await prisma.agent.findUnique({ where: { id: agentId }, select: { name: true } });
+    const execResult = await executeSandboxAction({
+      ...record,
+      agentName: agentRecord?.name ?? "Agent",
+      riskLevel: normalizedRisk.toLowerCase() as "low" | "medium",
+      status: "approved",
+      actionType: actionType as never,
+      channel: "slack" as const,
+    }).catch(() => null);
+
+    if (execResult?.ok) {
+      await prisma.approvalRequest.update({
+        where: { id: record.id },
+        data: { status: "EXECUTED", executedAt: new Date() },
+      }).catch(() => null);
+    }
 
     return {
       toolName: "request_approval",
       success: true,
       approvalQueued: false,
-      output: `Auto-approved (${normalizedRisk} risk). Title: "${title}". No human review required for ${normalizedRisk} risk actions — proceed with execution.`,
+      output: `Auto-approved and executed (${normalizedRisk} risk). Title: "${title}". Result: ${execResult?.message ?? "executed"}`,
     };
   }
 
@@ -381,6 +399,88 @@ async function execWriteMemory(agentId: string, args: ToolCallArgs): Promise<Too
   }
 }
 
+async function execPostSocialMedia(agentId: string, args: ToolCallArgs): Promise<ToolResult> {
+  const { platform, content, purpose, riskLevel = "medium" } = args as {
+    platform: string;
+    content: string;
+    purpose: string;
+    riskLevel?: string;
+  };
+
+  const normalizedRisk = riskLevel.toLowerCase();
+
+  // HIGH risk → route through approval inbox
+  if (normalizedRisk === "high" || normalizedRisk === "critical") {
+    return execRequestApproval(agentId, {
+      actionType: "publish_social_post",
+      title: `Post on ${platform}: ${content.slice(0, 60)}${content.length > 60 ? "…" : ""}`,
+      summary: purpose,
+      proposedAction: `Post to ${platform}: "${content}"`,
+      reason: purpose,
+      riskLevel,
+      expectedUpside: "Brand visibility and audience engagement",
+      downside: "Public-facing content — cannot be unposted easily",
+      exactExecution: JSON.stringify({ content, platform }),
+    });
+  }
+
+  // LOW/MEDIUM → post directly
+  const result = await postToTwitter({ content });
+
+  // Log it
+  const prisma = getPrismaClient();
+  if (prisma) {
+    await prisma.approvalRequest.create({
+      data: {
+        agentId,
+        actionType: "publish_social_post",
+        title: `${platform} post: ${content.slice(0, 80)}`,
+        summary: purpose,
+        proposedAction: `Posted to ${platform}`,
+        reason: purpose,
+        riskLevel: normalizedRisk === "low" ? "LOW" : "MEDIUM",
+        expectedUpside: "Brand visibility",
+        downside: "None for informational content",
+        exactExecution: JSON.stringify({ content, platform }),
+        requiresApproval: false,
+        previewOnly: false,
+        status: result.ok ? "EXECUTED" : "REJECTED",
+        executedAt: result.ok ? new Date() : undefined,
+      },
+    }).catch(() => null);
+  }
+
+  return {
+    toolName: "post_social_media",
+    success: result.ok,
+    output: result.ok
+      ? `Posted to ${platform}: "${content.slice(0, 80)}${content.length > 80 ? "…" : ""}". ${result.message}`
+      : `Failed to post to ${platform}: ${result.message}`,
+  };
+}
+
+async function execDeployWebsite(agentId: string, args: ToolCallArgs): Promise<ToolResult> {
+  const { siteName, htmlContent, purpose, estimatedRevenueImpact = "" } = args as {
+    siteName: string;
+    htmlContent: string;
+    purpose: string;
+    estimatedRevenueImpact?: string;
+  };
+
+  // Website deploys always require human approval — they're public-facing and irreversible
+  return execRequestApproval(agentId, {
+    actionType: "publish_website",
+    title: `Deploy website: ${siteName}`,
+    summary: purpose,
+    proposedAction: `Deploy "${siteName}" to Vercel as a live public website`,
+    reason: purpose,
+    riskLevel: "high",
+    expectedUpside: estimatedRevenueImpact || "Drive traffic and conversions for the business",
+    downside: "Publicly visible — represents the brand. Cannot be easily unpublished.",
+    exactExecution: JSON.stringify({ name: siteName, html: htmlContent }),
+  });
+}
+
 // ── Dispatch ─────────────────────────────────────────────────────────────────
 
 export async function executeTool(
@@ -401,6 +501,10 @@ export async function executeTool(
       return execLogExpense(agentId, args);
     case "write_memory":
       return execWriteMemory(agentId, args);
+    case "post_social_media":
+      return execPostSocialMedia(agentId, args);
+    case "deploy_website":
+      return execDeployWebsite(agentId, args);
     default:
       return {
         toolName,
