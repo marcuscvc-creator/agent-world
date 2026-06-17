@@ -9,10 +9,12 @@ import {
   Eye,
   Loader2,
   PauseCircle,
+  Play,
   ShieldCheck,
   Sparkles,
   X,
 } from "lucide-react";
+import { triggerAgentRun } from "@/app/actions/runAgents";
 import { PixelWorld } from "./PixelWorld";
 import type { Agent, Building, ApprovalRequest, ApprovalStatus } from "@/app/lib/types";
 
@@ -70,6 +72,7 @@ export function AgentWorldApp() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; tone: "good" | "warn" | "neutral" } | null>(null);
+  const [agentRunning, setAgentRunning] = useState(false);
 
   const showToast = (message: string, tone: "good" | "warn" | "neutral" = "neutral") => {
     setToast({ message, tone });
@@ -102,6 +105,26 @@ export function AgentWorldApp() {
     const interval = setInterval(fetchAll, 15_000);
     return () => clearInterval(interval);
   }, [fetchAll]);
+
+  async function handleRunAgents(agentId?: string) {
+    setAgentRunning(true);
+    try {
+      const result = await triggerAgentRun(agentId);
+      if ("agentsRun" in result) {
+        showToast(
+          `${result.agentsRun} agent${result.agentsRun !== 1 ? "s" : ""} ran · $${result.totalCostUsd.toFixed(4)} · ${result.approvalsQueued} approval${result.approvalsQueued !== 1 ? "s" : ""} queued`,
+          result.errors.length > 0 ? "warn" : "good"
+        );
+      } else {
+        showToast(result.error ? `Error: ${result.error}` : `Agent ran · $${result.costUsd.toFixed(4)}`, result.error ? "warn" : "good");
+      }
+      await fetchAll();
+    } catch (err) {
+      showToast(`Run failed: ${err instanceof Error ? err.message : String(err)}`, "warn");
+    } finally {
+      setAgentRunning(false);
+    }
+  }
 
   async function handleDecision(approvalId: string, decision: ApprovalStatus) {
     setActionLoading(approvalId);
@@ -150,6 +173,14 @@ export function AgentWorldApp() {
               <span className="font-mono text-xs text-amber-200">{approvals.length} pending</span>
             </div>
           )}
+          <button
+            onClick={() => handleRunAgents()}
+            disabled={agentRunning}
+            className="flex items-center gap-1.5 rounded border border-[#4ade80]/40 bg-[#4ade80]/10 px-3 py-1 font-mono text-xs font-semibold text-[#4ade80] transition-colors hover:bg-[#4ade80]/20 disabled:opacity-50"
+          >
+            {agentRunning ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
+            {agentRunning ? "Running…" : "Run Agents"}
+          </button>
         </div>
       </div>
 
@@ -206,6 +237,14 @@ export function AgentWorldApp() {
                   <p><span className="text-[#7a7090]">Trust:</span> {selectedAgent.trustScore}/100</p>
                 )}
               </div>
+              <button
+                onClick={() => handleRunAgents(selectedAgent.id)}
+                disabled={agentRunning}
+                className="mt-3 flex w-full items-center justify-center gap-1.5 rounded border border-[#7c3aed]/40 bg-[#7c3aed]/10 px-2 py-1.5 font-mono text-xs font-semibold text-[#c4b5fd] transition-colors hover:bg-[#7c3aed]/20 disabled:opacity-50"
+              >
+                {agentRunning ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} />}
+                {agentRunning ? "Running…" : `Run ${selectedAgent.name}`}
+              </button>
             </section>
           )}
 
