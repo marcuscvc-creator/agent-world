@@ -306,22 +306,18 @@ async function generateDraftImage(type: string, title: string): Promise<string |
   const prompt = `${basePrompt} Context: ${title.slice(0, 80)}.`;
 
   try {
+    // 25s timeout — DALL-E 3 typically responds in 10-20s
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 25000);
+
     const response = await fetch("https://api.openai.com/v1/images/generations", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "dall-e-3",
-        prompt,
-        n: 1,
-        size: "1024x1024",
-        quality: "standard",
-        response_format: "url",
-      }),
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "dall-e-3", prompt, n: 1, size: "1024x1024", quality: "standard", response_format: "url" }),
+      signal: controller.signal,
     });
 
+    clearTimeout(timer);
     if (!response.ok) return null;
     const data = (await response.json()) as { data?: Array<{ url?: string }> };
     return data.data?.[0]?.url ?? null;
@@ -330,53 +326,17 @@ async function generateDraftImage(type: string, title: string): Promise<string |
   }
 }
 
-export async function sendSlackDraftPreview(input: {
-  agentName: string;
-  title: string;
-  type: string;
-  content: string;
-  destination: string;
-  draftId: string;
-}): Promise<ExecutionResult> {
-  const token = process.env.SLACK_BOT_TOKEN;
-  const channel = process.env.SLACK_CHANNEL_ID;
-
-  if (!token || !channel) {
-    return { ok: false, mode: "sandbox", message: "Slack not configured for draft previews." };
-  }
-
-  if (getExecutionMode() === "demo") {
-    return { ok: true, mode: "mocked", message: "Demo: Slack draft preview skipped.", slackTs: `sandbox-${Date.now()}`, slackChannelId: channel };
-  }
-
-  const typeLabel = CONTENT_TYPE_LABELS[input.type] ?? `📄 ${input.type}`;
-  const isVisual = VISUAL_CONTENT_TYPES.has(input.type);
-
-  // Generate concept image for visual content types
-  const imageUrl = isVisual ? await generateDraftImage(input.type, input.title) : null;
-
-  // Truncate content to 800 chars for the preview card
+function buildDraftBlocks(input: { agentName: string; title: string; type: string; content: string; destination: string; draftId: string }, typeLabel: string, imageUrl?: string | null): object[] {
   const preview = input.content.length > 800 ? input.content.slice(0, 800) + "…" : input.content;
 
   const blocks: object[] = [
-    {
-      type: "header",
-      text: { type: "plain_text", text: `${typeLabel}: ${input.title}`, emoji: true },
-    },
+    { type: "header", text: { type: "plain_text", text: `${typeLabel}: ${input.title}`, emoji: true } },
     {
       type: "context",
-      elements: [
-        {
-          type: "mrkdwn",
-          text: `*Agent:* ${input.agentName}  ·  *For:* ${input.destination}  ·  *Draft ID:* \`${input.draftId.slice(-8)}\``,
-        },
-      ],
+      elements: [{ type: "mrkdwn", text: `*Agent:* ${input.agentName}  ·  *For:* ${input.destination}  ·  *Draft ID:* \`${input.draftId.slice(-8)}\`` }],
     },
     { type: "divider" },
-    {
-      type: "section",
-      text: { type: "mrkdwn", text: `*Draft:*\n\`\`\`${preview}\`\`\`` },
-    },
+    { type: "section", text: { type: "mrkdwn", text: `*Draft:*\n\`\`\`${preview}\`\`\`` } },
   ];
 
   if (imageUrl) {
@@ -390,43 +350,62 @@ export async function sendSlackDraftPreview(input: {
 
   blocks.push(
     { type: "divider" },
-    {
-      type: "context",
-      elements: [
-        {
-          type: "mrkdwn",
-          text: `⏳ *Awaiting review* — nothing has been sent or published. Reply \`YES\` to approve, \`NO\` to reject, or \`MODIFY\` to request changes.`,
-        },
-      ],
-    }
+    { type: "context", elements: [{ type: "mrkdwn", text: `⏳ *Awaiting review* — nothing has been sent. Reply \`YES\`, \`NO\`, or \`MODIFY\`.` }] }
   );
 
+  return blocks;
+}
+
+export async function sendSlackDraftPreview(input: {
+  agentName: string;
+  title: string;
+  type: string;
+  content: string;
+  destination: string;
+  draftId: string;
+}): Promise<ExecutionResult> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  const channel = process.env.SLACK_CHANNEL_ID;
+
+  if (!token || !channel) return { ok: false, mode: "sandbox", message: "Slack not configured for draft previews." };
+  if (getExecutionMode() === "demo") return { ok: true, mode: "mocked", message: "Demo: draft preview skipped.", slackTs: `sandbox-${Date.now()}`, slackChannelId: channel };
+
+  const typeLabel = CONTENT_TYPE_LABELS[input.type] ?? `📄 ${input.type}`;
+  const isVisual = VISUAL_CONTENT_TYPES.has(input.type);
+
+  // Step 1 — post text card immediately (never delayed by image generation)
   try {
-    const response = await fetch("https://slack.com/api/chat.postMessage", {
+    const textBlocks = buildDraftBlocks(input, typeLabel, isVisual ? null : undefined);
+    const textResponse = await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json; charset=utf-8",
-      },
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
       body: JSON.stringify({
         channel,
         text: `${typeLabel}: "${input.title}" by ${input.agentName} — awaiting your review`,
-        blocks,
+        blocks: textBlocks,
       }),
     });
 
-    const json = (await response.json()) as { ok: boolean; error?: string; ts?: string; channel?: string };
-    if (!json.ok) {
-      return { ok: false, mode: "live-slack", message: `Slack draft preview failed: ${json.error}`, rawError: json.error };
+    const textJson = (await textResponse.json()) as { ok: boolean; error?: string; ts?: string; channel?: string };
+    if (!textJson.ok) return { ok: false, mode: "live-slack", message: `Slack draft preview failed: ${textJson.error}`, rawError: textJson.error };
+
+    const messageTs = textJson.ts;
+    const slackChannel = textJson.channel;
+
+    // Step 2 — generate DALL-E image and update the message (non-blocking for the caller)
+    if (isVisual && messageTs) {
+      generateDraftImage(input.type, input.title).then(async (imageUrl) => {
+        if (!imageUrl) return;
+        const updatedBlocks = buildDraftBlocks(input, typeLabel, imageUrl);
+        await fetch("https://slack.com/api/chat.update", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({ channel: slackChannel, ts: messageTs, blocks: updatedBlocks, text: `${typeLabel}: "${input.title}" — ✨ concept image added` }),
+        }).catch(() => { /* non-fatal */ });
+      }).catch(() => { /* non-fatal */ });
     }
 
-    return {
-      ok: true,
-      mode: "live-slack",
-      message: `Draft preview sent to Slack${imageUrl ? " with DALL-E concept image" : ""}.`,
-      slackTs: json.ts,
-      slackChannelId: json.channel,
-    };
+    return { ok: true, mode: "live-slack", message: `Draft preview posted to Slack${isVisual ? " (concept image generating…)" : ""}.`, slackTs: messageTs, slackChannelId: slackChannel };
   } catch (error) {
     return { ok: false, mode: "live-slack", message: "Draft Slack preview delivery failed.", rawError: maskError(error) };
   }
