@@ -5,7 +5,7 @@ import type { ApprovalRequest, IntegrationConnection, PreviewItem, SlackMessageT
 
 export type ExecutionResult = {
   ok: boolean;
-  mode: "mocked" | "live-slack" | "live-stripe" | "sandbox";
+  mode: "mocked" | "live-slack" | "live-stripe" | "live-resend" | "live-twitter" | "live-vercel" | "sandbox";
   message: string;
   rawError?: string;
   slackTs?: string;
@@ -255,12 +255,453 @@ export async function handleStripeWebhook(payload: string | Buffer, signature: s
   }
 }
 
-export async function executeSandboxAction(request: ApprovalRequest): Promise<ExecutionResult> {
-  return {
-    ok: true,
-    mode: "sandbox",
-    message: `Sandbox executed: ${request.exactExecution}`
+// ── Resend Email ──────────────────────────────────────────────────────────────
+
+export async function sendEmailViaResend(input: {
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
+  from?: string;
+}): Promise<ExecutionResult> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromEmail = input.from ?? process.env.RESEND_FROM_EMAIL ?? "agents@agentworld.app";
+
+  if (!apiKey) {
+    return {
+      ok: false,
+      mode: "sandbox",
+      message: "Resend not connected. Add RESEND_API_KEY (and optionally RESEND_FROM_EMAIL) to Vercel env vars.",
+      rawError: "Missing RESEND_API_KEY",
+    };
+  }
+
+  if (getExecutionMode() === "demo") {
+    return { ok: true, mode: "mocked", message: `Demo: email to ${input.to} (subject: "${input.subject}") logged without delivery.` };
+  }
+
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: fromEmail,
+        to: [input.to],
+        subject: input.subject,
+        html: input.html,
+        text: input.text ?? "",
+      }),
+    });
+
+    const json = (await res.json()) as { id?: string; error?: { message?: string; name?: string } };
+
+    if (!res.ok || json.error) {
+      return {
+        ok: false,
+        mode: "live-resend",
+        message: `Resend failed: ${json.error?.message ?? "unknown error"}`,
+        rawError: JSON.stringify(json.error),
+      };
+    }
+
+    return {
+      ok: true,
+      mode: "live-resend",
+      message: `Email sent to ${input.to} (subject: "${input.subject}"). Resend ID: ${json.id}`,
+    };
+  } catch (error) {
+    return { ok: false, mode: "live-resend", message: "Email delivery failed.", rawError: maskError(error) };
+  }
+}
+
+// ── Twitter/X ────────────────────────────────────────────────────────────────
+
+async function buildTwitterOAuth1Header(
+  method: string,
+  url: string,
+  apiKey: string,
+  apiSecret: string,
+  accessToken: string,
+  accessSecret: string
+): Promise<string> {
+  const nonce = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+
+  const oauthParams: Record<string, string> = {
+    oauth_consumer_key: apiKey,
+    oauth_nonce: nonce,
+    oauth_signature_method: "HMAC-SHA256",
+    oauth_timestamp: timestamp,
+    oauth_token: accessToken,
+    oauth_version: "1.0",
   };
+
+  const pctEncode = (s: string) => encodeURIComponent(s).replace(/!/g, "%21").replace(/'/g, "%27").replace(/\(/g, "%28").replace(/\)/g, "%29").replace(/\*/g, "%2A");
+
+  const sortedParams = Object.entries(oauthParams)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${pctEncode(k)}=${pctEncode(v)}`)
+    .join("&");
+
+  const baseString = [method.toUpperCase(), pctEncode(url), pctEncode(sortedParams)].join("&");
+  const signingKey = `${pctEncode(apiSecret)}&${pctEncode(accessSecret)}`;
+
+  const encoder = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(signingKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  const sigBuffer = await crypto.subtle.sign("HMAC", cryptoKey, encoder.encode(baseString));
+  const sig = Buffer.from(sigBuffer).toString("base64");
+
+  oauthParams["oauth_signature"] = sig;
+
+  const header =
+    "OAuth " +
+    Object.entries(oauthParams)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${pctEncode(k)}="${pctEncode(v)}"`)
+      .join(", ");
+
+  return header;
+}
+
+export async function postToTwitter(input: { content: string }): Promise<ExecutionResult> {
+  const apiKey = process.env.TWITTER_API_KEY;
+  const apiSecret = process.env.TWITTER_API_SECRET;
+  const accessToken = process.env.TWITTER_ACCESS_TOKEN;
+  const accessSecret = process.env.TWITTER_ACCESS_SECRET;
+
+  if (!apiKey || !apiSecret || !accessToken || !accessSecret) {
+    return {
+      ok: false,
+      mode: "sandbox",
+      message: "Twitter not connected. Add TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET to Vercel env vars.",
+      rawError: "Missing Twitter credentials",
+    };
+  }
+
+  if (getExecutionMode() === "demo") {
+    return { ok: true, mode: "mocked", message: `Demo: tweet logged (${input.content.length} chars)` };
+  }
+
+  const url = "https://api.twitter.com/2/tweets";
+
+  try {
+    const authHeader = await buildTwitterOAuth1Header("POST", url, apiKey, apiSecret, accessToken, accessSecret);
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: authHeader, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: input.content }),
+    });
+
+    const json = (await res.json()) as {
+      data?: { id?: string; text?: string };
+      errors?: Array<{ message: string; title?: string }>;
+    };
+
+    if (!res.ok || json.errors?.length) {
+      const errMsg = json.errors?.[0]?.message ?? json.errors?.[0]?.title ?? "Unknown Twitter error";
+      return { ok: false, mode: "live-twitter", message: `Twitter post failed: ${errMsg}`, rawError: errMsg };
+    }
+
+    return {
+      ok: true,
+      mode: "live-twitter",
+      message: `Tweet posted (ID: ${json.data?.id}). Content: "${input.content.slice(0, 60)}${input.content.length > 60 ? "…" : ""}"`,
+    };
+  } catch (error) {
+    return { ok: false, mode: "live-twitter", message: "Twitter post failed.", rawError: maskError(error) };
+  }
+}
+
+// ── Vercel Deploy ─────────────────────────────────────────────────────────────
+
+export async function deployToVercel(input: { name: string; html: string }): Promise<ExecutionResult> {
+  const accessToken = process.env.VERCEL_TOKEN ?? process.env.VERCEL_ACCESS_TOKEN;
+  const teamId = process.env.VERCEL_TEAM_ID;
+
+  if (!accessToken) {
+    return {
+      ok: false,
+      mode: "sandbox",
+      message: "Vercel deploy not connected. Add VERCEL_ACCESS_TOKEN to Vercel env vars.",
+      rawError: "Missing VERCEL_ACCESS_TOKEN",
+    };
+  }
+
+  if (getExecutionMode() === "demo") {
+    return { ok: true, mode: "mocked", message: `Demo: landing page "${input.name}" would be deployed to Vercel.` };
+  }
+
+  try {
+    const htmlBytes = new TextEncoder().encode(input.html);
+
+    // Compute SHA-1 of the file content for Vercel's digest header
+    const shaBuffer = await crypto.subtle.digest("SHA-1", htmlBytes);
+    const shaHex = Array.from(new Uint8Array(shaBuffer))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    // Step 1 — upload the file
+    const fileRes = await fetch("https://api.vercel.com/v2/files", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "text/html",
+        "x-vercel-digest": shaHex,
+        ...(teamId ? { "x-vercel-team-id": teamId } : {}),
+      },
+      body: input.html,
+    });
+
+    // 200 = already uploaded (fine), 201 = uploaded now — anything else is an error
+    if (fileRes.status !== 200 && fileRes.status !== 201) {
+      const errText = await fileRes.text();
+      return { ok: false, mode: "live-vercel", message: "Vercel file upload failed.", rawError: errText };
+    }
+
+    // Step 2 — create deployment
+    const deployPayload: Record<string, unknown> = {
+      name: input.name.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 100),
+      files: [{ file: "index.html", sha: shaHex, size: htmlBytes.byteLength }],
+      projectSettings: { framework: null, outputDirectory: null },
+      target: "production",
+    };
+
+    if (teamId) deployPayload.teamId = teamId;
+
+    const deployRes = await fetch("https://api.vercel.com/v13/deployments", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(deployPayload),
+    });
+
+    const deployJson = (await deployRes.json()) as {
+      id?: string;
+      url?: string;
+      error?: { message?: string; code?: string };
+    };
+
+    if (!deployRes.ok || deployJson.error) {
+      return {
+        ok: false,
+        mode: "live-vercel",
+        message: `Vercel deploy failed: ${deployJson.error?.message ?? "unknown error"}`,
+        rawError: JSON.stringify(deployJson.error),
+      };
+    }
+
+    const siteUrl = `https://${deployJson.url}`;
+    return { ok: true, mode: "live-vercel", message: siteUrl };
+  } catch (error) {
+    return { ok: false, mode: "live-vercel", message: "Vercel deploy failed.", rawError: maskError(error) };
+  }
+}
+
+// ── Real-World Action Router ──────────────────────────────────────────────────
+
+export async function executeSandboxAction(request: ApprovalRequest): Promise<ExecutionResult> {
+  // Parse exactExecution as JSON for structured params — agents are instructed to write JSON here
+  let params: Record<string, unknown> = {};
+  try {
+    if (request.exactExecution?.trim().startsWith("{")) {
+      params = JSON.parse(request.exactExecution) as Record<string, unknown>;
+    }
+  } catch {
+    // Not JSON — params stays empty, fall through to text-based handling
+  }
+
+  const str = (key: string, fallback = "") => String(params[key] ?? fallback);
+
+  switch (request.actionType) {
+    // ── Email ──
+    case "send_email":
+    case "contact_customer": {
+      const to = str("to");
+      if (!to) {
+        return {
+          ok: false,
+          mode: "sandbox",
+          message: `Email action missing "to" address. Agent must set exactExecution to JSON: {"to":"...","subject":"...","html":"..."}`,
+        };
+      }
+      return sendEmailViaResend({
+        to,
+        subject: str("subject", request.title ?? "Message from Agent World"),
+        html: str("html", str("body", `<p>${request.exactExecution}</p>`)),
+        text: str("text"),
+      });
+    }
+
+    // ── Social Posting ──
+    case "publish_social_post": {
+      const content = str("content", request.exactExecution ?? "");
+      const platform = str("platform", "twitter").toLowerCase();
+      if (platform === "twitter" || platform === "x") {
+        return postToTwitter({ content });
+      }
+      return {
+        ok: false,
+        mode: "sandbox",
+        message: `Social platform "${platform}" not yet wired. Currently supports: twitter/x. Add Instagram or LinkedIn credentials to expand.`,
+      };
+    }
+
+    // ── Product / Stripe ──
+    case "draft_product": {
+      const name = str("name", request.title ?? "New Product");
+      const description = str("description", request.summary ?? "");
+      const priceCents = Number(params.price_cents ?? params.priceCents ?? 4900);
+
+      const productResult = await createStripeProduct({ name, description });
+      if (!productResult.ok || !productResult.stripeId) return productResult;
+
+      const priceResult = await createStripePrice({ productId: productResult.stripeId, unitAmount: priceCents });
+      if (!priceResult.ok || !priceResult.stripeId) return priceResult;
+
+      const linkResult = await createStripePaymentLink({ priceId: priceResult.stripeId, approved: true });
+      return {
+        ...linkResult,
+        message: `Product "${name}" ($${(priceCents / 100).toFixed(2)}) created on Stripe. Payment link: ${linkResult.message}`,
+      };
+    }
+
+    // ── Website Deploy ──
+    case "publish_website": {
+      const projectName = str("name", request.title ?? "agent-landing").toLowerCase().replace(/\s+/g, "-");
+      const html = str("html", "<h1>Coming soon</h1>");
+      return deployToVercel({ name: projectName, html });
+    }
+
+    // ── Stripe Refund ──
+    case "issue_refund": {
+      const stripe = stripeClient();
+      if (!stripe) return { ok: false, mode: "sandbox", message: "Stripe not connected for refunds." };
+
+      const chargeId = str("charge_id", str("chargeId"));
+      if (!chargeId) {
+        return {
+          ok: false,
+          mode: "sandbox",
+          message: `Refund missing "charge_id". Agent must set exactExecution to JSON: {"charge_id":"ch_xxx","amount_cents":4900}`,
+        };
+      }
+
+      const amountCents = Number(params.amount_cents ?? params.amountCents ?? 0);
+      try {
+        const refund = await stripe.refunds.create({
+          charge: chargeId,
+          ...(amountCents > 0 ? { amount: amountCents } : {}),
+        });
+        return {
+          ok: true,
+          mode: "live-stripe",
+          message: `Refund of $${(refund.amount / 100).toFixed(2)} issued (ID: ${refund.id}).`,
+          stripeId: refund.id,
+        };
+      } catch (error) {
+        return { ok: false, mode: "live-stripe", message: "Stripe refund failed.", rawError: maskError(error) };
+      }
+    }
+
+    // ── Stripe Price Change ──
+    case "change_price": {
+      const stripe = stripeClient();
+      if (!stripe) return { ok: false, mode: "sandbox", message: "Stripe not connected for price changes." };
+
+      const priceId = str("price_id", str("priceId"));
+      const newAmountCents = Number(params.new_amount_cents ?? params.newAmountCents ?? 0);
+
+      if (!priceId || !newAmountCents) {
+        return {
+          ok: false,
+          mode: "sandbox",
+          message: `Price change missing params. Agent must set exactExecution to JSON: {"price_id":"price_xxx","new_amount_cents":4900}`,
+        };
+      }
+
+      try {
+        const existing = await stripe.prices.retrieve(priceId);
+        const newPrice = await stripe.prices.create({
+          product: String(existing.product),
+          unit_amount: newAmountCents,
+          currency: existing.currency,
+        });
+        await stripe.prices.update(priceId, { active: false });
+        return {
+          ok: true,
+          mode: "live-stripe",
+          message: `Price updated to $${(newAmountCents / 100).toFixed(2)}. New price ID: ${newPrice.id}. Old price archived.`,
+          stripeId: newPrice.id,
+        };
+      } catch (error) {
+        return { ok: false, mode: "live-stripe", message: "Stripe price change failed.", rawError: maskError(error) };
+      }
+    }
+
+    // ── Spend Money (meta action — no direct API call, logs intent) ──
+    case "spend_money": {
+      return {
+        ok: true,
+        mode: "sandbox",
+        message: `Spending approved: ${request.exactExecution}. Complete the purchase manually, then have the agent log it with log_expense.`,
+      };
+    }
+
+    // ── Ads (not yet wired) ──
+    case "launch_ad": {
+      return {
+        ok: false,
+        mode: "sandbox",
+        message: "Ad platform not yet connected. Add GOOGLE_ADS_DEVELOPER_TOKEN or META_ADS_ACCESS_TOKEN to enable ad launching.",
+      };
+    }
+
+    // ── DMs (Twitter DM requires separate OAuth scope) ──
+    case "send_dm": {
+      return {
+        ok: false,
+        mode: "sandbox",
+        message: "Direct messaging not yet wired. Twitter DMs require an additional OAuth scope beyond basic posting.",
+      };
+    }
+
+    // ── Enable Live Stripe ──
+    case "enable_live_stripe": {
+      return {
+        ok: true,
+        mode: "sandbox",
+        message: "To go live on Stripe: set STRIPE_MODE=live and add STRIPE_LIVE_SECRET_KEY in Vercel → Settings → Environment Variables, then redeploy.",
+      };
+    }
+
+    // ── Draft actions: should be handled by draft_content tool, not approval ──
+    case "draft_email":
+    case "draft_ad":
+    case "draft_social_post":
+    case "draft_landing_page":
+      return {
+        ok: true,
+        mode: "sandbox",
+        message: `Draft action "${request.actionType}" saved. Use draft_content tool to route drafts to the review queue, not request_approval.`,
+      };
+
+    default:
+      return {
+        ok: true,
+        mode: "sandbox",
+        message: `Action "${request.actionType}" executed in sandbox: ${request.exactExecution}`,
+      };
+  }
 }
 
 // ── Slack Draft Previews ─────────────────────────────────────────────────────
