@@ -134,6 +134,9 @@ export async function runSingleAgent(agentId: string): Promise<ThinkResult> {
 /**
  * Run the next IDLE agent in round-robin order (oldest updatedAt first).
  * Designed for Vercel Hobby: one agent per call, stays under 10s timeout.
+ *
+ * Auto-recovery: before picking an agent, reset any stuck in THINKING/WORKING/WAITING_APPROVAL
+ * for more than 60 seconds (caused by Vercel function timeouts killing the process mid-run).
  */
 export async function runNextAgent(): Promise<
   (ThinkResult & { agentId: string; agentName: string }) | { skipped: true; reason: string }
@@ -141,6 +144,16 @@ export async function runNextAgent(): Promise<
   const prisma = getPrismaClient();
   if (!prisma) return { skipped: true, reason: "Database not connected." };
   if (!process.env.OPENAI_API_KEY) return { skipped: true, reason: "OPENAI_API_KEY not set." };
+
+  // Recover agents stuck in intermediate states for > 60s (Vercel timeout victims)
+  const stuckCutoff = new Date(Date.now() - 60_000);
+  await prisma.agent.updateMany({
+    where: {
+      status: { in: ["THINKING", "WORKING", "WAITING_APPROVAL"] },
+      updatedAt: { lt: stuckCutoff },
+    },
+    data: { status: "IDLE" },
+  }).catch(() => null);
 
   const agent = await prisma.agent.findFirst({
     where: { status: "IDLE" },
