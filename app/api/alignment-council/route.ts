@@ -259,7 +259,7 @@ INSTRUCTIONS:
     for (const assignment of council.taskAssignments ?? []) {
       if (!assignment.agentId || !assignment.title) continue;
       const agent = agents.find((a) => a.id === assignment.agentId);
-      if (!agent || agent.status === "PAUSED" || agent.status === "OFFLINE") continue;
+      if (!agent) continue;
 
       const priorityMap: Record<string, "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"> = {
         low: "LOW", medium: "MEDIUM", high: "HIGH", critical: "CRITICAL",
