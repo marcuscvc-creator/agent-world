@@ -79,14 +79,14 @@ export async function POST(request: Request) {
             if (isNameSet) updateData.establishedAt = new Date();
           }
 
-          await prisma.businessIdentity.upsert({
+          await (prisma as any).businessIdentity.upsert({
             where: { id: "biz-identity" },
             create: { id: "biz-identity", ...updateData },
             update: updateData,
           });
 
           // Mirror to shared strategic memory
-          await prisma.sharedStrategicMemory.upsert({
+          await (prisma as any).sharedStrategicMemory.upsert({
             where: { key: `identity_${field}` },
             create: { key: `identity_${field}`, value, updatedBy: "human-approval", version: 1 },
             update: { value, updatedBy: "human-approval", version: { increment: 1 } },
@@ -94,7 +94,7 @@ export async function POST(request: Request) {
 
           // Advance world stage to BUSINESS_CHOSEN when name is approved
           if (isNameSet) {
-            await prisma.worldState.update({
+            await (prisma as any).worldState.update({
               where: { id: "world-singleton" },
               data: { businessStage: "BUSINESS_CHOSEN" },
             }).catch(() => null);

@@ -66,7 +66,8 @@ export type AgentActionType =
   | "change_price"
   | "issue_refund"
   | "contact_customer"
-  | "enable_live_stripe";
+  | "enable_live_stripe"
+  | "update_business_identity";
 
 export type LocationKey =
   | "camp"
