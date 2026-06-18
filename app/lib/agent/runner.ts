@@ -145,11 +145,13 @@ export async function runNextAgent(): Promise<
   if (!prisma) return { skipped: true, reason: "Database not connected." };
   if (!process.env.OPENAI_API_KEY) return { skipped: true, reason: "OPENAI_API_KEY not set." };
 
-  // Recover agents stuck in intermediate states for > 60s (Vercel timeout victims)
+  // Recover agents stuck in THINKING or WORKING for > 60s (Vercel timeout victims).
+  // WAITING_APPROVAL is intentional and must NOT be auto-cleared here — it persists
+  // until the human approves or rejects via the approvals UI.
   const stuckCutoff = new Date(Date.now() - 60_000);
   await prisma.agent.updateMany({
     where: {
-      status: { in: ["THINKING", "WORKING", "WAITING_APPROVAL"] },
+      status: { in: ["THINKING", "WORKING"] },
       updatedAt: { lt: stuckCutoff },
     },
     data: { status: "IDLE" },
