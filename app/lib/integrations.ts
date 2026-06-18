@@ -293,14 +293,22 @@ export async function sendEmailViaResend(input: {
       }),
     });
 
-    const json = (await res.json()) as { id?: string; error?: { message?: string; name?: string } };
+    const json = (await res.json()) as {
+      id?: string;
+      error?: { message?: string; name?: string };
+      // Resend also returns errors at root level
+      message?: string;
+      name?: string;
+      statusCode?: number;
+    };
 
     if (!res.ok || json.error) {
+      const errMsg = json.error?.message ?? json.message ?? `HTTP ${res.status}`;
       return {
         ok: false,
         mode: "live-resend",
-        message: `Resend failed: ${json.error?.message ?? "unknown error"}`,
-        rawError: JSON.stringify(json.error),
+        message: `Resend failed: ${errMsg}`,
+        rawError: JSON.stringify(json.error ?? { message: json.message, name: json.name, statusCode: json.statusCode }),
       };
     }
 
