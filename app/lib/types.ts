@@ -59,6 +59,7 @@ export type AgentActionType =
   | "send_email"
   | "send_dm"
   | "publish_website"
+  | "deploy_website"
   | "publish_social_post"
   | "launch_ad"
   | "spend_money"
