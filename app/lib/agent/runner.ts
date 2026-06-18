@@ -6,6 +6,7 @@
 
 import { getPrismaClient } from "../prisma";
 import { thinkAgentTurn, type ThinkResult } from "./think";
+import { getActiveRoster } from "./roster";
 
 export type RunnerResult = {
   triggeredAt: string;
@@ -50,10 +51,19 @@ export async function runAgentLoop(options?: { agentIds?: string[] }): Promise<R
     return { ...empty, errors: [{ agentId: "system", agentName: "System", error: "OPENAI_API_KEY not set." }] };
   }
 
-  // Load eligible agents
+  // Load active roster — only these agents may run
+  const activeRoster = await getActiveRoster();
+
+  // Load eligible agents — IDLE/WORKING, not paused, in active roster
   const whereClause = options?.agentIds
     ? { id: { in: options.agentIds } }
-    : { status: { in: ["IDLE", "WORKING"] as ("IDLE" | "WORKING")[] } };
+    : {
+        status: { in: ["IDLE", "WORKING"] as ("IDLE" | "WORKING")[] },
+        // Skip agents manually paused (currentTask starts with "PAUSED:")
+        NOT: { currentTask: { startsWith: "PAUSED:" } },
+        // Only run agents whose name is in the current stage's active roster
+        name: { in: activeRoster as string[] },
+      };
 
   const agents = await prisma.agent.findMany({
     where: whereClause,
