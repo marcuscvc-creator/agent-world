@@ -280,30 +280,49 @@ export async function sendEmailViaResend(input: {
     return { ok: true, mode: "mocked", message: `Demo: email to ${input.to} (subject: "${input.subject}") logged without delivery.` };
   }
 
-  try {
+  const ownerEmail = process.env.RESEND_FROM_EMAIL?.includes("@")
+    ? undefined  // RESEND_FROM_EMAIL is the from address, not the owner
+    : undefined;
+  const fallbackOwner = process.env.AGENT_OWNER_EMAIL ?? "mbollescvc@gmail.com";
+
+  async function attemptSend(to: string, subject: string, html: string, text: string) {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        from: fromEmail,
-        to: [input.to],
-        subject: input.subject,
-        html: input.html,
-        text: input.text ?? "",
-      }),
+      body: JSON.stringify({ from: fromEmail, to: [to], subject, html, text }),
     });
-
     const json = (await res.json()) as {
       id?: string;
       error?: { message?: string; name?: string };
-      // Resend also returns errors at root level
       message?: string;
       name?: string;
       statusCode?: number;
     };
+    return { ok: res.ok && !json.error, json };
+  }
 
-    if (!res.ok || json.error) {
-      const errMsg = json.error?.message ?? json.message ?? `HTTP ${res.status}`;
+  try {
+    const { ok, json } = await attemptSend(input.to, input.subject, input.html, input.text ?? "");
+
+    if (!ok) {
+      const errMsg = json.error?.message ?? json.message ?? `HTTP unknown`;
+      const isTestingRestriction = errMsg.toLowerCase().includes("testing emails") || errMsg.toLowerCase().includes("own email address");
+
+      // Resend free plan: can only send to owner email.
+      // Auto-redirect to owner inbox so agents can continue working.
+      if (isTestingRestriction && input.to !== fallbackOwner) {
+        const redirectSubject = `[REDIRECTED → ${input.to}] ${input.subject}`;
+        const redirectHtml = `<p><em>⚠️ Email redirected from intended recipient <strong>${input.to}</strong> (Resend testing mode — domain not yet verified).</em></p><hr/>${input.html}`;
+        const { ok: ok2, json: json2 } = await attemptSend(fallbackOwner, redirectSubject, redirectHtml, input.text ?? "");
+        if (ok2) {
+          return {
+            ok: true,
+            mode: "live-resend",
+            message: `Email redirected to owner inbox (${fallbackOwner}) — intended for ${input.to}. Subject: "${input.subject}". Resend ID: ${json2.id}`,
+          };
+        }
+      }
+
       return {
         ok: false,
         mode: "live-resend",
