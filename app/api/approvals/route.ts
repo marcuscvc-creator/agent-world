@@ -37,7 +37,7 @@ export async function POST(request: Request) {
 
   const approval = await prisma.approvalRequest.findUnique({
     where: { id: body.approvalId },
-    include: { agent: { select: { id: true, name: true } } },
+    include: { agent: { select: { id: true, name: true, currentTask: true } } },
   });
 
   if (!approval) {
@@ -110,8 +110,12 @@ export async function POST(request: Request) {
       where: { id: body.approvalId },
       data: { status: "EXECUTED", executedAt: new Date() },
     });
-    // Reset agent to IDLE so it can continue on the next tick
-    await prisma.agent.update({ where: { id: approval.agentId }, data: { status: "IDLE" } }).catch(() => null);
+    // PAUSED agents go back to BLOCKED after execution; others go to IDLE
+    const isPausedAgent = (approval.agent as unknown as { currentTask?: string })?.currentTask?.startsWith("PAUSED:") ?? false;
+    await prisma.agent.update({
+      where: { id: approval.agentId },
+      data: { status: isPausedAgent ? "BLOCKED" : "IDLE" },
+    }).catch(() => null);
     const confirmation = await sendSlackExecutedMessage(approvalShape, result);
     return NextResponse.json({ approval: updated, result, confirmation });
   }
@@ -121,8 +125,12 @@ export async function POST(request: Request) {
       where: { id: body.approvalId },
       data: { status: "MODIFICATION_REQUESTED" },
     });
-    // Reset agent to IDLE so it can retry with modification feedback
-    await prisma.agent.update({ where: { id: approval.agentId }, data: { status: "IDLE" } }).catch(() => null);
+    // PAUSED agents go back to BLOCKED; others go to IDLE to retry with modification feedback
+    const isPausedMod = (approval.agent as unknown as { currentTask?: string })?.currentTask?.startsWith("PAUSED:") ?? false;
+    await prisma.agent.update({
+      where: { id: approval.agentId },
+      data: { status: isPausedMod ? "BLOCKED" : "IDLE" },
+    }).catch(() => null);
     return NextResponse.json({
       approval: updated,
       result: { ok: true, mode: "sandbox", message: "Action paused. Agent needs human changes before retrying." },
@@ -133,8 +141,12 @@ export async function POST(request: Request) {
     where: { id: body.approvalId },
     data: { status: "REJECTED", resolvedAt: new Date() },
   });
-  // Reset agent to IDLE on rejection so it can take a different action next tick
-  await prisma.agent.update({ where: { id: approval.agentId }, data: { status: "IDLE" } }).catch(() => null);
+  // PAUSED agents go back to BLOCKED on rejection so they can't re-run
+  const isPausedReject = (approval.agent as unknown as { currentTask?: string })?.currentTask?.startsWith("PAUSED:") ?? false;
+  await prisma.agent.update({
+    where: { id: approval.agentId },
+    data: { status: isPausedReject ? "BLOCKED" : "IDLE" },
+  }).catch(() => null);
   return NextResponse.json({
     approval: updated,
     result: { ok: true, mode: "sandbox", message: "Action rejected and logged." },
