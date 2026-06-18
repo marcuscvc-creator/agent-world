@@ -4,12 +4,13 @@
   "installCommand": "pnpm install",
   "regions": ["iad1"],
   "functions": {
+    "app/api/orchestrate/route.ts": { "maxDuration": 300 },
     "app/api/agent-tick/route.ts": { "maxDuration": 300 },
     "app/api/alignment-council/route.ts": { "maxDuration": 300 }
   },
   "crons": [
     {
-      "path": "/api/agent-tick",
+      "path": "/api/orchestrate",
       "schedule": "* * * * *"
     },
     {

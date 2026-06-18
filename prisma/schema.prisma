@@ -99,6 +99,16 @@ enum ExecutionMode {
   LIVE
 }
 
+enum BusinessStage {
+  DISCOVERY
+  BUSINESS_CHOSEN
+  VALIDATION
+  BUILD
+  LAUNCH
+  FIRST_REVENUE
+  GROWTH
+}
+
 enum SpendingRequestStatus {
   PENDING
   APPROVED
@@ -518,22 +528,24 @@ model ExpenseEvent {
 }
 
 model WorldState {
-  id               String   @id @default(cuid())
-  grossRevenue     Decimal  @default(0) @db.Decimal(12, 2)
-  netRevenue       Decimal  @default(0) @db.Decimal(12, 2)
-  mrr              Decimal  @default(0) @db.Decimal(12, 2)
-  arr              Decimal  @default(0) @db.Decimal(12, 2)
-  expenses         Decimal  @default(0) @db.Decimal(12, 2)
-  profit           Decimal  @default(0) @db.Decimal(12, 2)
-  stage            String   @default("campsite")
-  websitesLaunched Int      @default(0)
-  productsLaunched Int      @default(0)
-  businesses       Int      @default(0)
-  leads            Int      @default(0)
-  traffic          Int      @default(0)
-  conversionRate   Decimal  @default(0) @db.Decimal(5, 2)
+  id               String        @id @default(cuid())
+  grossRevenue     Decimal       @default(0) @db.Decimal(12, 2)
+  netRevenue       Decimal       @default(0) @db.Decimal(12, 2)
+  mrr              Decimal       @default(0) @db.Decimal(12, 2)
+  arr              Decimal       @default(0) @db.Decimal(12, 2)
+  expenses         Decimal       @default(0) @db.Decimal(12, 2)
+  profit           Decimal       @default(0) @db.Decimal(12, 2)
+  stage            String        @default("campsite")
+  businessStage    BusinessStage @default(DISCOVERY)
+  activeRoster     Json          @default("[\"Ada\",\"Felix\",\"Mira\"]")
+  websitesLaunched Int           @default(0)
+  productsLaunched Int           @default(0)
+  businesses       Int           @default(0)
+  leads            Int           @default(0)
+  traffic          Int           @default(0)
+  conversionRate   Decimal       @default(0) @db.Decimal(5, 2)
   executionMode    ExecutionMode @default(SUPERVISED_LIVE)
-  updatedAt        DateTime @updatedAt
+  updatedAt        DateTime      @updatedAt
 }
 
 // --- New models added in Phase 1 rebuild ---
@@ -613,6 +625,34 @@ model BusinessIdentity {
   establishedAt         DateTime?
   approvedByHuman       Boolean   @default(false)
   updatedAt             DateTime  @updatedAt
+}
+
+/// Snapshot of world state at last orchestrator cycle — used to detect meaningful changes.
+model OrchestratorState {
+  id                    String   @id @default("orchestrator-singleton")
+  lastCycleAt           DateTime @default(now())
+  lastAgentStatuses     Json     @default("{}")   // { agentId: status }
+  lastPendingApprovals  Int      @default(0)
+  lastPendingTasks      Int      @default(0)
+  lastSlackMessageCount Int      @default(0)
+  lastBusinessIdeaCount Int      @default(0)
+  lastRevenue           Decimal  @default(0) @db.Decimal(12, 2)
+  lastCouncilAt         DateTime @default(now())
+  cycleCount            Int      @default(0)
+  updatedAt             DateTime @updatedAt
+}
+
+/// Tracks AI spend per day and month for budget enforcement.
+model BudgetTracker {
+  id           String   @id @default("budget-singleton")
+  dailySpend   Decimal  @default(0) @db.Decimal(8, 6)
+  monthlySpend Decimal  @default(0) @db.Decimal(10, 4)
+  dailyDate    String   @default("")   // "YYYY-MM-DD" — resets when date changes
+  monthlyDate  String   @default("")   // "YYYY-MM"    — resets when month changes
+  hardCap      Decimal  @default(50)   @db.Decimal(8, 2)
+  dailyCap     Decimal  @default(2)    @db.Decimal(8, 2)
+  throttled    Boolean  @default(false)
+  updatedAt    DateTime @updatedAt
 }
 
 /// Resource gaps agents identify — missing tools, accounts, integrations.

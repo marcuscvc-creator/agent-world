@@ -1,80 +1,58 @@
 /**
  * /api/alignment-council
  *
- * POST — Run a single GPT-4o synthesis call that acts as the 4-hour Alignment Council.
- * Called by the Vercel cron (every 4 hours) and optionally by a manual trigger.
+ * POST — Option A round-robin Alignment Council.
+ * Each active roster agent gets a sequential OpenAI call and sees
+ * the full transcript of what previous agents said.
+ * Ada goes last to synthesize and make final decisions.
  *
- * Stays under the 10s Vercel Hobby timeout by doing ONE OpenAI call (not 8 agent ticks).
- * The synthesis reads all recent AgentThoughts + SharedStrategicMemory + WorldState + Tasks,
- * then produces:
- *   - A strategic narrative summary
- *   - Updated SharedStrategicMemory keys
- *   - Task assignments for each agent
- *   - Business identity recommendation (if not yet established)
- *   - Flagged resource gaps
- *
- * Saves an AlignmentCouncil record, updates SharedStrategicMemory, creates Task records,
- * and posts a Slack digest.
+ * Called by the Vercel cron (every 6 hours) and optionally manually.
+ * Output stored in SharedStrategicMemory and posted to Slack.
  */
 
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { getPrismaClient } from "../../lib/prisma";
 import { sendSlackMessage } from "../../lib/integrations";
+import { getActiveRoster, type AgentName } from "../../lib/agent/roster";
+import { recordSpend, getBudgetStatus } from "../../lib/agent/budget";
+import { calculateCostUsd } from "../../lib/ai/costs";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ── Types for the council output ────────────────────────────────────────────
+const COUNCIL_MODEL = "gpt-4o-mini"; // Tier 2 per agent
+const ADA_MODEL = "gpt-4o-mini";     // Ada synthesizes — same tier, just different prompt
 
-type Decision = {
+type AgentContribution = {
+  agentName: AgentName;
+  role: string;
+  contribution: string;
+  topPriority: string;
+  concerns: string;
+};
+
+type CouncilDecision = {
   decision: string;
-  assignee: string; // agentId
+  assignee: string;
   priority: "high" | "medium" | "low";
   successMetric: string;
 };
 
-type StrategicUpdate = {
-  key: string;
-  value: string;
-};
-
-type ResourceGapReport = {
-  resourceType: string;
-  name: string;
-  reason: string;
-  estimatedRoi: string;
-  alternatives: string;
-  estimatedCost: string;
-  urgency: "low" | "medium" | "high";
-};
-
-type TaskAssignment = {
-  agentId: string;
-  title: string;
-  goal: string;
-  priority: "low" | "medium" | "high" | "critical";
-};
-
 type CouncilOutput = {
   summary: string;
-  strategicUpdates: StrategicUpdate[];
-  decisions: Decision[];
-  taskAssignments: TaskAssignment[];
-  resourceGaps: ResourceGapReport[];
-  businessIdentityRecommendation?: {
-    field: string;
-    value: string;
-    rationale: string;
-  } | null;
+  strategicUpdates: Array<{ key: string; value: string }>;
+  decisions: CouncilDecision[];
+  taskAssignments: Array<{ agentId: string; title: string; goal: string; priority: string }>;
+  resourceGaps: Array<{
+    resourceType: string; name: string; reason: string;
+    estimatedRoi: string; alternatives: string; estimatedCost: string; urgency: string;
+  }>;
 };
-
-// ── Main handler ─────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
   const { searchParams } = new URL(req.url);
   const isManual = searchParams.get("manual") === "true";
 
-  // Verify cron secret for automated calls
   if (!isManual) {
     const authHeader = req.headers.get("authorization");
     const cronSecret = process.env.CRON_SECRET;
@@ -84,247 +62,287 @@ export async function POST(req: Request) {
   }
 
   const prisma = getPrismaClient();
-  if (!prisma) {
-    return NextResponse.json({ error: "Database not connected" }, { status: 500 });
-  }
+  if (!prisma) return NextResponse.json({ error: "Database not connected" }, { status: 500 });
+  if (!process.env.OPENAI_API_KEY) return NextResponse.json({ error: "OPENAI_API_KEY not configured" }, { status: 500 });
 
-  if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json({ error: "OPENAI_API_KEY not configured" }, { status: 500 });
+  // Budget check
+  const budget = await getBudgetStatus();
+  if (budget.blocked) {
+    return NextResponse.json({
+      ok: false,
+      reason: `Monthly budget cap reached — council skipped`,
+    });
   }
 
   const startedAt = Date.now();
 
   try {
-    // ── 1. Gather context ──────────────────────────────────────────────────────
+    // ── 1. Load context ──────────────────────────────────────────────────────
 
     const [
-      agents,
+      allAgents,
       worldState,
       recentThoughts,
       strategicMemory,
       bizIdentity,
       openTasks,
-      openGaps,
+      pendingApprovals,
       lastCouncil,
     ] = await Promise.all([
-      prisma.agent.findMany({ select: { id: true, name: true, role: true, status: true } }),
+      prisma.agent.findMany({ select: { id: true, name: true, role: true, personality: true, status: true, currentGoal: true } }),
       prisma.worldState.findFirst({ where: { id: "world-singleton" } }),
-      prisma.agentThought.findMany({
-        where: { createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+      (prisma as any).agentThought.findMany({
+        where: { createdAt: { gte: new Date(Date.now() - 6 * 60 * 60 * 1000) } },
         orderBy: { createdAt: "desc" },
-        take: 60,
+        take: 40,
         select: { agentId: true, reasoning: true, createdAt: true },
       }),
       prisma.sharedStrategicMemory.findMany({ orderBy: { key: "asc" } }),
-      prisma.businessIdentity.findUnique({ where: { id: "biz-identity" } }),
+      (prisma as any).businessIdentity.findUnique({ where: { id: "biz-identity" } }),
       prisma.task.findMany({
         where: { status: { in: ["QUEUED", "IN_PROGRESS"] } },
-        select: { id: true, agentId: true, title: true, goal: true, status: true, priority: true },
-        take: 20,
+        select: { agentId: true, title: true, priority: true, status: true },
+        take: 15,
+        orderBy: { createdAt: "desc" },
       }),
-      prisma.resourceGap.findMany({
-        where: { status: "open" },
-        select: { name: true, urgency: true, reason: true },
-        take: 10,
-      }),
+      prisma.approvalRequest.count({ where: { status: "PENDING" } }),
       prisma.alignmentCouncil.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true, summary: true } }),
     ]);
 
-    const gross = worldState ? Number(worldState.grossRevenue) : 0;
+    const activeRoster = await getActiveRoster();
 
-    // Format agent thoughts grouped by agent
+    // Build context strings
+    const strategicMemoryStr = strategicMemory
+      .map((m) => `${m.key}: ${m.value.slice(0, 200)}`)
+      .join("\n") || "No strategic memory yet.";
+
+    const businessContext =
+      bizIdentity?.name
+        ? `Business: ${bizIdentity.name} — ${bizIdentity.missionStatement || "(no mission yet)"}`
+        : "No business established yet. Agents are in DISCOVERY phase.";
+
+    const worldContext = `Revenue: $${Number(worldState?.grossRevenue ?? 0).toFixed(2)} | Stage: ${worldState?.businessStage ?? "DISCOVERY"} | Pending approvals: ${pendingApprovals}`;
+
+    const openTasksStr = openTasks.length > 0
+      ? openTasks.map((t) => `- [${t.agentId}] ${t.title} (${t.priority}, ${t.status})`).join("\n")
+      : "No open tasks.";
+
+    // Group recent thoughts by agent
     const thoughtsByAgent: Record<string, string[]> = {};
     for (const t of recentThoughts) {
       if (!thoughtsByAgent[t.agentId]) thoughtsByAgent[t.agentId] = [];
-      thoughtsByAgent[t.agentId].push(t.reasoning.slice(0, 300));
+      thoughtsByAgent[t.agentId].push(t.reasoning.slice(0, 200));
     }
 
-    const agentReports = agents.map((a) => ({
-      agentId: a.id,
-      name: a.name,
-      role: a.role,
-      status: a.status,
-      recentThoughts: (thoughtsByAgent[a.id] ?? []).slice(0, 5),
-    }));
+    // ── 2. Round-robin: each active agent contributes ────────────────────────
+    // Non-Ada agents go first, Ada synthesizes last
 
-    const strategicMemoryMap = Object.fromEntries(
-      strategicMemory.map((r) => [r.key, r.value])
+    const contributions: AgentContribution[] = [];
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    const transcript: string[] = [];
+
+    const nonAdaRoster = activeRoster.filter((n) => n !== "Ada");
+    const orderedRoster: AgentName[] = [...nonAdaRoster, "Ada"].filter((n) =>
+      activeRoster.includes(n)
     );
 
-    const bizSummary =
-      bizIdentity && bizIdentity.name
-        ? `Name: ${bizIdentity.name}, Mission: ${bizIdentity.missionStatement}, Revenue model: ${bizIdentity.revenueModel}`
-        : "NOT ESTABLISHED";
+    for (const agentName of orderedRoster) {
+      const agentRecord = allAgents.find((a) => a.name === agentName);
+      if (!agentRecord) continue;
 
-    // ── 2. Build synthesis prompt ──────────────────────────────────────────────
+      const isAda = agentName === "Ada";
+      const agentThoughts = (thoughtsByAgent[agentRecord.id] ?? []).slice(0, 3).join(" | ") || "No recent activity.";
 
-    const systemPrompt = `You are the Alignment Council moderator for Agent World — an autonomous AI startup.
-Your job is to synthesize what has happened in the last 24 hours, produce a clear strategic direction, and assign concrete work to each agent.
-Output ONLY valid JSON matching the CouncilOutput schema. No markdown, no explanation — raw JSON only.
+      const transcriptSoFar = transcript.length > 0
+        ? `\nCOUNCIL TRANSCRIPT SO FAR:\n${transcript.join("\n\n")}\n`
+        : "\nYou are the first to speak in this council.\n";
 
-CouncilOutput schema:
+      const systemMsg = isAda
+        ? `You are Ada, CEO of Agent World. You have heard from your team in the council above. Your job is to synthesize their input, make final strategic decisions, and produce a concrete action plan.
+Output ONLY valid JSON:
 {
-  "summary": "string — 2-3 sentence strategic narrative of where the business stands and what the team should focus on",
-  "strategicUpdates": [{ "key": "string", "value": "string" }],
-  "decisions": [{ "decision": "string", "assignee": "agentId", "priority": "high|medium|low", "successMetric": "string" }],
-  "taskAssignments": [{ "agentId": "string", "title": "string", "goal": "string", "priority": "low|medium|high|critical" }],
-  "resourceGaps": [{ "resourceType": "string", "name": "string", "reason": "string", "estimatedRoi": "string", "alternatives": "string", "estimatedCost": "string", "urgency": "low|medium|high" }],
-  "businessIdentityRecommendation": { "field": "string", "value": "string", "rationale": "string" } | null
+  "summary": "2-3 sentence strategic narrative",
+  "topPriority": "single most important focus this cycle",
+  "concerns": "any risks or blockers you see",
+  "strategicUpdates": [{"key": "string", "value": "string"}],
+  "decisions": [{"decision": "string", "assignee": "agentId string", "priority": "high|medium|low", "successMetric": "string"}],
+  "taskAssignments": [{"agentId": "string", "title": "string", "goal": "string", "priority": "low|medium|high|critical"}],
+  "resourceGaps": [{"resourceType": "string", "name": "string", "reason": "string", "estimatedRoi": "string", "alternatives": "string", "estimatedCost": "string", "urgency": "low|medium|high"}]
+}`
+        : `You are ${agentName}, ${agentRecord.role} at Agent World. You are participating in the Alignment Council.
+Be direct and specific. Focus on what matters from your role's perspective.
+Output ONLY valid JSON:
+{
+  "contribution": "2-3 sentences on your current situation and what you're working on",
+  "topPriority": "the single most important thing for the business right now from your perspective",
+  "concerns": "any blockers, risks, or things the team should know"
 }`;
 
-    const userPrompt = `CURRENT STATE:
-Gross revenue: $${gross.toLocaleString()}
-Business identity: ${bizSummary}
-Last council: ${lastCouncil ? lastCouncil.createdAt.toISOString().slice(0, 10) + " — " + lastCouncil.summary.slice(0, 200) : "Never — this is the first council."}
+      const userMsg = `${businessContext}
+${worldContext}
+Last council: ${lastCouncil ? lastCouncil.summary.slice(0, 150) : "First council ever."}
 
-SHARED STRATEGIC MEMORY:
-${JSON.stringify(strategicMemoryMap, null, 2)}
+SHARED STRATEGY:
+${strategicMemoryStr}
 
-OPEN RESOURCE GAPS:
-${openGaps.map((g) => `- ${g.name} (${g.urgency}): ${g.reason}`).join("\n") || "None"}
+OPEN TASKS:
+${openTasksStr}
 
-CURRENT OPEN TASKS:
-${openTasks.map((t) => `[${t.agentId}] ${t.title}: ${t.goal} (${t.priority}, ${t.status})`).join("\n") || "None"}
+YOUR RECENT ACTIVITY:
+${agentThoughts}
+${transcriptSoFar}
+${isAda ? "Now synthesize the team's input and produce the final council output." : `As ${agentName}, share your contribution to this council.`}`;
 
-AGENT TEAM & RECENT THOUGHTS (last 24h):
-${JSON.stringify(agentReports, null, 2)}
+      try {
+        const response = await openai.chat.completions.create({
+          model: isAda ? ADA_MODEL : COUNCIL_MODEL,
+          temperature: 0.5,
+          max_tokens: isAda ? 1500 : 400,
+          messages: [
+            { role: "system", content: systemMsg },
+            { role: "user", content: userMsg },
+          ],
+          response_format: { type: "json_object" },
+        });
 
-INSTRUCTIONS:
-1. Write a 2-3 sentence summary of where the business stands and what the key focus should be.
-2. Produce strategicUpdates — update at minimum: business_objective, current_priorities, last_council_summary. Add new keys for any important discoveries.
-3. Produce decisions — concrete choices the team is making this cycle (max 5).
-4. Assign ONE concrete task per active agent (skip PAUSED/OFFLINE agents). Tasks must be specific and achievable in one agent turn.
-5. Flag new resource gaps only if NOT already in the open gaps list above and there is a clear ROI case.
-6. If the business identity is NOT ESTABLISHED, provide a businessIdentityRecommendation for the most impactful field to set first (usually "name" or "missionStatement").
-7. If business identity IS established, set businessIdentityRecommendation to null.`;
+        totalInputTokens += response.usage?.prompt_tokens ?? 0;
+        totalOutputTokens += response.usage?.completion_tokens ?? 0;
 
-    // ── 3. Call GPT-4o ────────────────────────────────────────────────────────
+        const raw = response.choices[0]?.message?.content ?? "{}";
+        const parsed = JSON.parse(raw);
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      temperature: 0.3,
-      max_tokens: 2000,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      response_format: { type: "json_object" },
-    });
+        if (isAda) {
+          // Ada's output IS the final council output
+          const adaOutput = parsed as CouncilOutput & { topPriority: string; concerns: string };
+          contributions.push({
+            agentName: "Ada",
+            role: agentRecord.role,
+            contribution: adaOutput.summary ?? "",
+            topPriority: adaOutput.topPriority ?? "",
+            concerns: adaOutput.concerns ?? "",
+          });
+          transcript.push(`ADA (CEO — synthesis):\n${adaOutput.summary}`);
 
-    const raw = completion.choices[0]?.message?.content ?? "{}";
-    let council: CouncilOutput;
+          // Record spend
+          const cost = calculateCostUsd(ADA_MODEL, totalInputTokens, totalOutputTokens);
+          await recordSpend(cost);
 
-    try {
-      council = JSON.parse(raw) as CouncilOutput;
-    } catch {
-      return NextResponse.json(
-        { error: "GPT-4o returned invalid JSON", raw },
-        { status: 500 }
-      );
+          // ── 3. Persist results ────────────────────────────────────────────
+
+          // Update SharedStrategicMemory
+          for (const update of adaOutput.strategicUpdates ?? []) {
+            if (!update.key || !update.value) continue;
+            await prisma.sharedStrategicMemory.upsert({
+              where: { key: update.key },
+              create: { key: update.key, value: update.value, updatedBy: "alignment-council", version: 1 },
+              update: { value: update.value, updatedBy: "alignment-council", version: { increment: 1 } },
+            });
+          }
+
+          // Save ResourceGaps
+          const existingGaps = await prisma.resourceGap.findMany({ where: { status: "open" }, select: { name: true } });
+          const existingNames = new Set(existingGaps.map((g) => g.name.toLowerCase()));
+          for (const gap of adaOutput.resourceGaps ?? []) {
+            if (!gap.name || existingNames.has(gap.name.toLowerCase())) continue;
+            await prisma.resourceGap.create({
+              data: {
+                reportedBy: "alignment-council",
+                resourceType: gap.resourceType ?? "other",
+                name: gap.name,
+                reason: gap.reason ?? "",
+                estimatedRoi: gap.estimatedRoi ?? "",
+                alternatives: gap.alternatives ?? "",
+                estimatedCost: gap.estimatedCost ?? "",
+                urgency: gap.urgency ?? "medium",
+              },
+            }).catch(() => null);
+          }
+
+          // Create task assignments
+          const createdTasks: string[] = [];
+          for (const t of adaOutput.taskAssignments ?? []) {
+            if (!t.agentId || !t.title) continue;
+            const priorityMap: Record<string, string> = { low: "LOW", medium: "MEDIUM", high: "HIGH", critical: "CRITICAL" };
+            await prisma.task.create({
+              data: {
+                agentId: t.agentId,
+                title: t.title,
+                goal: t.goal ?? t.title,
+                status: "QUEUED",
+                priority: priorityMap[(t.priority ?? "medium").toLowerCase()] ?? "MEDIUM",
+                source: "SYSTEM",
+              },
+            }).catch(() => null);
+            createdTasks.push(t.title);
+          }
+
+          // Save council record
+          const councilRecord = await prisma.alignmentCouncil.create({
+            data: {
+              councilType: isManual ? "manual" : "scheduled",
+              summary: adaOutput.summary ?? "",
+              agentReports: contributions as never,
+              decisions: (adaOutput.decisions ?? []) as never,
+              objectives: (adaOutput.strategicUpdates ?? []) as never,
+              resourceGaps: (adaOutput.resourceGaps ?? []) as never,
+            },
+          });
+
+          // Post Slack digest
+          try {
+            const contributionLines = contributions
+              .filter((c) => c.agentName !== "Ada")
+              .map((c) => `• *${c.agentName}*: ${c.topPriority}`)
+              .join("\n");
+
+            const slackText =
+              `🏛️ *Alignment Council — ${new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}*\n\n` +
+              `*Ada's Summary:*\n${adaOutput.summary}\n\n` +
+              (contributionLines ? `*Team priorities:*\n${contributionLines}\n\n` : "") +
+              `_${orderedRoster.length} agents participated | ${createdTasks.length} tasks created | Council ID: ${councilRecord.id} | ${Math.round((Date.now() - startedAt) / 1000)}s_`;
+
+            await sendSlackMessage({ type: "EXECUTED", text: slackText });
+          } catch {
+            // non-fatal
+          }
+
+          return NextResponse.json({
+            ok: true,
+            councilId: councilRecord.id,
+            agentsParticipated: orderedRoster.length,
+            summary: adaOutput.summary,
+            decisionsCount: (adaOutput.decisions ?? []).length,
+            tasksCreated: createdTasks.length,
+            tokensUsed: totalInputTokens + totalOutputTokens,
+            costUsd: calculateCostUsd(COUNCIL_MODEL, totalInputTokens, totalOutputTokens),
+            durationMs: Date.now() - startedAt,
+          });
+        } else {
+          // Non-Ada agents: capture their contribution and add to transcript
+          const contribution: AgentContribution = {
+            agentName,
+            role: agentRecord.role,
+            contribution: parsed.contribution ?? "",
+            topPriority: parsed.topPriority ?? "",
+            concerns: parsed.concerns ?? "",
+          };
+          contributions.push(contribution);
+          transcript.push(`${agentName.toUpperCase()} (${agentRecord.role}):\nView: ${parsed.contribution}\nPriority: ${parsed.topPriority}\nConcerns: ${parsed.concerns}`);
+        }
+      } catch (err) {
+        // If one agent fails, continue with the rest
+        console.error(`[alignment-council] Agent ${agentName} failed:`, err);
+        transcript.push(`${agentName.toUpperCase()}: [failed to contribute — skipped]`);
+      }
     }
 
-    // ── 4. Persist results ────────────────────────────────────────────────────
-
-    // 4a. Update SharedStrategicMemory
-    for (const update of council.strategicUpdates ?? []) {
-      if (!update.key || !update.value) continue;
-      await prisma.sharedStrategicMemory.upsert({
-        where: { key: update.key },
-        create: { key: update.key, value: update.value, updatedBy: "alignment-council", version: 1 },
-        update: { value: update.value, updatedBy: "alignment-council", version: { increment: 1 } },
-      });
-    }
-
-    // 4b. Save new ResourceGaps (skip duplicates)
-    const existingGapNames = new Set(openGaps.map((g) => g.name.toLowerCase()));
-    for (const gap of council.resourceGaps ?? []) {
-      if (!gap.name || existingGapNames.has(gap.name.toLowerCase())) continue;
-      await prisma.resourceGap.create({
-        data: {
-          reportedBy: "alignment-council",
-          resourceType: gap.resourceType ?? "other",
-          name: gap.name,
-          reason: gap.reason ?? "",
-          estimatedRoi: gap.estimatedRoi ?? "",
-          alternatives: gap.alternatives ?? "",
-          estimatedCost: gap.estimatedCost ?? "",
-          urgency: gap.urgency ?? "medium",
-          status: "open",
-        },
-      }).catch(() => null);
-    }
-
-    // 4c. Create task assignments (skip agents with existing open tasks for same title)
-    const newTasks: string[] = [];
-    for (const assignment of council.taskAssignments ?? []) {
-      if (!assignment.agentId || !assignment.title) continue;
-      const agent = agents.find((a) => a.id === assignment.agentId);
-      if (!agent) continue;
-
-      const priorityMap: Record<string, "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"> = {
-        low: "LOW", medium: "MEDIUM", high: "HIGH", critical: "CRITICAL",
-      };
-      const priority = priorityMap[(assignment.priority ?? "medium").toLowerCase()] ?? "MEDIUM";
-
-      await prisma.task.create({
-        data: {
-          agentId: assignment.agentId,
-          title: assignment.title,
-          goal: assignment.goal ?? assignment.title,
-          status: "QUEUED",
-          priority,
-          source: "SYSTEM",
-        },
-      }).catch(() => null);
-
-      newTasks.push(`[${assignment.agentId}] ${assignment.title}`);
-    }
-
-    // 4d. Save AlignmentCouncil record
-    const councilRecord = await prisma.alignmentCouncil.create({
-      data: {
-        councilType: isManual ? "manual" : "scheduled",
-        summary: council.summary ?? "",
-        agentReports: agentReports as never,
-        decisions: (council.decisions ?? []) as never,
-        objectives: (council.strategicUpdates ?? []) as never,
-        resourceGaps: (council.resourceGaps ?? []) as never,
-      },
-    });
-
-    // ── 5. Post Slack digest ──────────────────────────────────────────────────
-
-    try {
-      const decisionLines = (council.decisions ?? [])
-        .slice(0, 5)
-        .map((d) => `• *${d.decision}* → ${d.assignee} (${d.priority})`)
-        .join("\n");
-
-      const taskLines = newTasks.slice(0, 8).join("\n• ");
-
-      const slackText =
-        `🏛️ *Alignment Council — ${new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}*\n\n` +
-        `*Strategic Summary:*\n${council.summary}\n\n` +
-        (decisionLines ? `*Decisions this cycle:*\n${decisionLines}\n\n` : "") +
-        (newTasks.length > 0 ? `*New tasks assigned:*\n• ${taskLines}\n\n` : "") +
-        `_Council ID: ${councilRecord.id} | Duration: ${Math.round((Date.now() - startedAt) / 1000)}s_`;
-
-      await sendSlackMessage({ type: "EXECUTED", text: slackText });
-    } catch {
-      // Slack failure is non-fatal
-    }
-
-    const durationMs = Date.now() - startedAt;
-
+    // Fallback if Ada wasn't in the roster somehow
     return NextResponse.json({
-      ok: true,
-      councilId: councilRecord.id,
-      summary: council.summary,
-      strategicUpdatesCount: (council.strategicUpdates ?? []).length,
-      tasksCreated: newTasks.length,
-      resourceGapsFlagged: (council.resourceGaps ?? []).length,
-      durationMs,
+      ok: false,
+      reason: "Ada not in active roster — council incomplete",
     });
+
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[alignment-council] Error:", message);
@@ -332,7 +350,6 @@ INSTRUCTIONS:
   }
 }
 
-// Allow manual GET trigger from the dashboard
 export async function GET(req: Request) {
   const url = new URL(req.url);
   url.searchParams.set("manual", "true");
