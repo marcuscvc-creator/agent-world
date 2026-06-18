@@ -143,9 +143,9 @@ export async function POST(req: Request) {
     const transcript: string[] = [];
 
     const nonAdaRoster = activeRoster.filter((n) => n !== "Ada");
-    const orderedRoster: AgentName[] = [...nonAdaRoster, "Ada"].filter((n) =>
-      activeRoster.includes(n)
-    );
+    const orderedRoster: AgentName[] = ([...nonAdaRoster, "Ada" as AgentName].filter((n) =>
+      activeRoster.includes(n as AgentName)
+    )) as AgentName[];
 
     for (const agentName of orderedRoster) {
       const agentRecord = allAgents.find((a) => a.name === agentName);
