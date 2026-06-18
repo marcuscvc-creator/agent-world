@@ -134,6 +134,9 @@ export async function thinkAgentTurn(agentId: string): Promise<ThinkResult> {
         break;
       }
 
+      // Mark agent as WORKING now that it has tool calls to execute
+      await prisma.agent.update({ where: { id: agentId }, data: { status: "WORKING" } }).catch(() => null);
+
       // Execute each tool call
       const toolResultMessages: OpenAI.Chat.ChatCompletionToolMessageParam[] = [];
 
@@ -194,9 +197,9 @@ export async function thinkAgentTurn(agentId: string): Promise<ThinkResult> {
       }).catch(() => null);
     }
 
-    // Always return to IDLE after each turn — agents don't block on approvals.
-    // Approval requests are handled asynchronously by the human via the approvals UI.
-    const newStatus = "IDLE";
+    // If approval was queued, set WAITING_APPROVAL so UI shows the right state.
+    // Otherwise return to IDLE so the agent can be picked up next tick.
+    const newStatus = approvalQueued ? "WAITING_APPROVAL" : "IDLE";
     await prisma.agent.update({
       where: { id: agentId },
       data: { status: newStatus },
