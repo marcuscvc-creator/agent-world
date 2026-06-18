@@ -64,6 +64,8 @@ export async function POST(request: Request) {
       where: { id: body.approvalId },
       data: { status: "EXECUTED", executedAt: new Date() },
     });
+    // Reset agent to IDLE so it can continue on the next tick
+    await prisma.agent.update({ where: { id: approval.agentId }, data: { status: "IDLE" } }).catch(() => null);
     const confirmation = await sendSlackExecutedMessage(approvalShape, result);
     return NextResponse.json({ approval: updated, result, confirmation });
   }
@@ -73,6 +75,8 @@ export async function POST(request: Request) {
       where: { id: body.approvalId },
       data: { status: "MODIFICATION_REQUESTED" },
     });
+    // Reset agent to IDLE so it can retry with modification feedback
+    await prisma.agent.update({ where: { id: approval.agentId }, data: { status: "IDLE" } }).catch(() => null);
     return NextResponse.json({
       approval: updated,
       result: { ok: true, mode: "sandbox", message: "Action paused. Agent needs human changes before retrying." },
@@ -83,6 +87,8 @@ export async function POST(request: Request) {
     where: { id: body.approvalId },
     data: { status: "REJECTED", resolvedAt: new Date() },
   });
+  // Reset agent to IDLE on rejection so it can take a different action next tick
+  await prisma.agent.update({ where: { id: approval.agentId }, data: { status: "IDLE" } }).catch(() => null);
   return NextResponse.json({
     approval: updated,
     result: { ok: true, mode: "sandbox", message: "Action rejected and logged." },
