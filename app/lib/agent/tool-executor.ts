@@ -59,7 +59,7 @@ async function execRequestApproval(agentId: string, args: ToolCallArgs): Promise
     critical: "CRITICAL",
   };
 
-  const normalizedRisk = riskMap[riskLevel.toLowerCase()] ?? "MEDIUM";
+  const normalizedRisk = riskMap[(riskLevel ?? "medium").toLowerCase()] ?? "MEDIUM";
 
   // LOW and MEDIUM risk: auto-approve AND auto-execute immediately.
   // Only HIGH and CRITICAL require human sign-off.
@@ -87,7 +87,7 @@ async function execRequestApproval(agentId: string, args: ToolCallArgs): Promise
     const execResult = await executeSandboxAction({
       ...record,
       agentName: agentRecord?.name ?? "Agent",
-      riskLevel: normalizedRisk.toLowerCase() as "low" | "medium",
+      riskLevel: (normalizedRisk ?? "medium").toLowerCase() as "low" | "medium",
       status: "approved",
       actionType: actionType as never,
       channel: "slack" as const,
@@ -158,7 +158,7 @@ async function execRequestApproval(agentId: string, args: ToolCallArgs): Promise
       summary: approval.summary ?? undefined,
       proposedAction: approval.proposedAction,
       reason: approval.reason,
-      riskLevel: riskLevel.toLowerCase() as "low" | "medium" | "high" | "critical",
+      riskLevel: (riskLevel ?? "medium").toLowerCase() as "low" | "medium" | "high" | "critical",
       requiresApproval: true,
       previewOnly: false,
       channel: "slack" as const,
@@ -407,7 +407,7 @@ async function execPostSocialMedia(agentId: string, args: ToolCallArgs): Promise
     riskLevel?: string;
   };
 
-  const normalizedRisk = riskLevel.toLowerCase();
+  const normalizedRisk = (riskLevel ?? "medium").toLowerCase();
 
   // HIGH risk → route through approval inbox
   if (normalizedRisk === "high" || normalizedRisk === "critical") {
