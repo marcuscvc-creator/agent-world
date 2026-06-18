@@ -584,9 +584,12 @@ export async function executeSandboxAction(request: ApprovalRequest): Promise<Ex
     }
 
     // ── Website Deploy ──
+    case "deploy_website":
     case "publish_website": {
-      const projectName = str("name", request.title ?? "agent-landing").toLowerCase().replace(/\s+/g, "-");
-      const html = str("html", "<h1>Coming soon</h1>");
+      // Accept both "name"/"html" and "siteName"/"htmlContent" field aliases
+      const projectName = (str("name") || str("siteName") || request.title || "agent-landing")
+        .toLowerCase().replace(/\s+/g, "-");
+      const html = str("html") || str("htmlContent") || "<h1>Coming soon</h1>";
       return deployToVercel({ name: projectName, html });
     }
 
