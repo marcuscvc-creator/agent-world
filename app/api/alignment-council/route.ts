@@ -113,7 +113,7 @@ export async function POST(req: Request) {
         where: { createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
         orderBy: { createdAt: "desc" },
         take: 60,
-        select: { agentId: true, content: true, createdAt: true },
+        select: { agentId: true, reasoning: true, createdAt: true },
       }),
       prisma.sharedStrategicMemory.findMany({ orderBy: { key: "asc" } }),
       prisma.businessIdentity.findUnique({ where: { id: "biz-identity" } }),
@@ -136,7 +136,7 @@ export async function POST(req: Request) {
     const thoughtsByAgent: Record<string, string[]> = {};
     for (const t of recentThoughts) {
       if (!thoughtsByAgent[t.agentId]) thoughtsByAgent[t.agentId] = [];
-      thoughtsByAgent[t.agentId].push(t.content.slice(0, 300));
+      thoughtsByAgent[t.agentId].push(t.reasoning.slice(0, 300));
     }
 
     const agentReports = agents.map((a) => ({
