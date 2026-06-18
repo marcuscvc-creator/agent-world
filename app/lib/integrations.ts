@@ -402,12 +402,20 @@ export async function postToTwitter(input: { content: string }): Promise<Executi
 
     const json = (await res.json()) as {
       data?: { id?: string; text?: string };
-      errors?: Array<{ message: string; title?: string }>;
+      errors?: Array<{ message?: string; title?: string }>;
+      title?: string;
+      detail?: string;
+      status?: number;
     };
 
     if (!res.ok || json.errors?.length) {
-      const errMsg = json.errors?.[0]?.message ?? json.errors?.[0]?.title ?? "Unknown Twitter error";
-      return { ok: false, mode: "live-twitter", message: `Twitter post failed: ${errMsg}`, rawError: errMsg };
+      const errMsg =
+        json.errors?.[0]?.message ??
+        json.errors?.[0]?.title ??
+        json.detail ??
+        json.title ??
+        `HTTP ${res.status}`;
+      return { ok: false, mode: "live-twitter", message: `Twitter post failed (${res.status}): ${errMsg}`, rawError: errMsg };
     }
 
     return {
