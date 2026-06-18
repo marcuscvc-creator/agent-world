@@ -5,7 +5,7 @@ import type { ApprovalRequest, IntegrationConnection, PreviewItem, SlackMessageT
 
 export type ExecutionResult = {
   ok: boolean;
-  mode: "mocked" | "live-slack" | "live-stripe" | "live-resend" | "live-twitter" | "live-vercel" | "sandbox";
+  mode: "mocked" | "live-slack" | "live-stripe" | "live-resend" | "live-twitter" | "live-vercel" | "sandbox" | "deferred";
   message: string;
   rawError?: string;
   slackTs?: string;
