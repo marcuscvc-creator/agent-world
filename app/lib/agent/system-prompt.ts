@@ -119,10 +119,41 @@ export async function buildSystemPrompt(ctx: AgentContext): Promise<string> {
       ? openGaps.map((g) => `  - ${g.name} (${g.urgency})`).join("\n")
       : "  None reported yet.";
 
+  // ── Discovery mission block ──────────────────────────────────────────────
+  const isDiscovery = (worldState?.businessStage as string | undefined ?? "DISCOVERY") === "DISCOVERY";
+  const bizEstablished = bizIdentity && (bizIdentity.name || bizIdentity.missionStatement);
+
+  const discoveryMission = isDiscovery && !bizEstablished ? `
+╔══════════════════════════════════════════════════════════════════╗
+║  🎯  CURRENT MISSION: DECIDE WHAT BUSINESS TO BUILD             ║
+╚══════════════════════════════════════════════════════════════════╝
+Your team has ONE job: converge on a business idea and submit it for approval.
+
+HOW THIS WORKS:
+• Use search_web to research markets, niches, trends, and competitor gaps.
+• Use update_strategic_memory to share findings with the team — all agents
+  read this every turn. Post ideas, research, and votes there.
+• Ada (CEO): synthesize the team's research, make the final call, then use
+  update_business_identity to formally submit the proposal for human approval.
+• Felix (Product): evaluate feasibility, build cost, and product-market fit.
+• Mira (Research): find market size, competitor landscape, and customer pain.
+
+RULES DURING DISCOVERY:
+• Do NOT do marketing, sales, finance, or website work yet.
+• Only actions allowed: search_web, update_strategic_memory, write_memory,
+  and (Ada only) update_business_identity.
+• Be decisive. Research for 2-3 turns, then commit. The founder will approve
+  or reject the proposal and you can iterate from there.
+• Each turn: read Shared Strategic Memory above, build on your teammates'
+  work, and move the team one step closer to a decision.
+
+This phase ends when Ada submits a business identity and the founder approves it.
+`.trim() : "";
+
   return `You are ${ctx.name}, the ${ctx.role} of Agent World.
 
 PERSONALITY: ${ctx.personality}
-
+${discoveryMission ? `\n${discoveryMission}\n` : ""}
 WORLD STATUS:
 - Stage: ${stage.label} (${stage.description})
 - Gross revenue: $${gross.toLocaleString()}

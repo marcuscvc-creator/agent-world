@@ -14,7 +14,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { triggerAgentRun, triggerNextAgent } from "@/app/actions/runAgents";
+import { triggerAgentRun } from "@/app/actions/runAgents";
 import { PixelWorld } from "./PixelWorld";
 import type { Agent, Building, ApprovalRequest, ApprovalStatus } from "@/app/lib/types";
 
@@ -117,20 +117,16 @@ export function AgentWorldApp() {
           result.error ? "warn" : "good"
         );
       } else {
-        // Cycle through all agents one at a time (Vercel Hobby: 10s limit per call)
-        const AGENT_COUNT = 8;
-        let ran = 0;
-        let totalCost = 0;
-        for (let i = 0; i < AGENT_COUNT; i++) {
-          const result = await triggerNextAgent();
-          if ("skipped" in result) break; // no more IDLE agents
-          ran++;
-          totalCost += result.costUsd ?? 0;
-          await new Promise((r) => setTimeout(r, 300)); // brief pause between calls
-        }
+        // Route through orchestrator — respects active roster, budget, and cooldowns
+        const res = await fetch("/api/orchestrate", { method: "POST" });
+        const result = await res.json();
+        const woken: string[] = result.agentsWoken ?? [];
+        const cost: number = result.costUsd ?? 0;
         showToast(
-          ran > 0 ? `${ran} agent${ran !== 1 ? "s" : ""} ran · $${totalCost.toFixed(4)}` : "No IDLE agents to run",
-          ran > 0 ? "good" : "warn"
+          woken.length > 0
+            ? `${woken.join(", ")} woke up · $${cost.toFixed(4)}`
+            : result.reason ?? "No agents to wake right now",
+          woken.length > 0 ? "good" : "warn"
         );
       }
       await fetchAll();
@@ -284,18 +280,24 @@ export function AgentWorldApp() {
               {agents.length === 0 ? (
                 <p className="text-xs text-[#7a7090]">No agents yet. Seed the database.</p>
               ) : (
-                agents.map((agent) => (
+                agents.map((agent) => {
+                  const isDormant = String(agent.currentTask ?? "").startsWith("PAUSED:");
+                  return (
                   <button
                     key={agent.id}
                     onClick={() => setSelectedAgent(agent)}
+                    disabled={isDormant}
                     className={`flex w-full items-center gap-2 rounded border px-3 py-2 text-left transition-colors ${
-                      selectedAgent?.id === agent.id
+                      isDormant
+                        ? "cursor-default border-[#1a1628] bg-[#0f0d1a] opacity-40"
+                        : selectedAgent?.id === agent.id
                         ? "border-[#7c3aed]/60 bg-[#7c3aed]/10"
                         : "border-[#2a1f3d] bg-[#181622] hover:border-[#7c3aed]/30"
                     }`}
                   >
                     <span
                       className={`h-2 w-2 flex-shrink-0 rounded-full ${
+                        isDormant ? "bg-[#2a1f3d]" :
                         String(agent.status) === "WORKING" ? "bg-[#4ade80]" :
                         String(agent.status) === "THINKING" ? "bg-[#60a5fa]" :
                         String(agent.status) === "WAITING_APPROVAL" ? "bg-amber-400" :
@@ -304,11 +306,15 @@ export function AgentWorldApp() {
                     />
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-mono text-xs font-semibold text-[#f7f1dc]">{agent.name}</p>
-                      <p className="truncate text-xs text-[#7a7090]">{agent.role}</p>
+                      <p className="truncate text-xs text-[#7a7090]">{isDormant ? "dormant" : agent.role}</p>
                     </div>
-                    <ChevronRight size={12} className="flex-shrink-0 text-[#4a4060]" />
+                    {isDormant
+                      ? <PauseCircle size={12} className="flex-shrink-0 text-[#2a1f3d]" />
+                      : <ChevronRight size={12} className="flex-shrink-0 text-[#4a4060]" />
+                    }
                   </button>
-                ))
+                  );
+                })
               )}
             </div>
           </section>

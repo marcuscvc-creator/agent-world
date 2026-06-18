@@ -1,8 +1,12 @@
 /**
  * orchestrator.ts
- * The Orchestrator runs every 60 seconds (Tier 0 — no AI).
- * It scans the environment, detects meaningful changes, and wakes
- * only the correct agent(s) when something real has happened.
+ * Runs every 60 seconds (Tier 0 — no AI).
+ *
+ * DISCOVERY mode: proactively pushes Ada/Felix/Mira every 5 minutes until
+ * they produce and submit a business idea for human approval. Once an
+ * approved idea exists, normal event-driven logic takes over.
+ *
+ * All other modes: only wake agents when something meaningful changed.
  * Most cycles cost $0.
  */
 
@@ -10,7 +14,6 @@ import { getPrismaClient } from "../prisma";
 import { getBudgetStatus } from "./budget";
 import {
   getActiveRoster,
-  getBusinessStage,
   checkAndAdvanceMilestone,
   resolveTargetAgents,
   type OrchestratorEvent,
@@ -33,7 +36,8 @@ export interface OrchestratorResult {
   agentResults: Array<{ agentName: AgentName; result: ThinkResult | { skipped: true; reason: string } }>;
 }
 
-const COUNCIL_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+const COUNCIL_INTERVAL_MS = 4 * 60 * 60 * 1000;  // 4 hours
+const DISCOVERY_COOLDOWN_MS = 5 * 60 * 1000;      // 5 minutes between agent re-runs in Discovery
 
 export async function runOrchestrator(): Promise<OrchestratorResult> {
   const prisma = getPrismaClient();
@@ -61,7 +65,6 @@ export async function runOrchestrator(): Promise<OrchestratorResult> {
   if (budget.blocked) {
     return {
       ...empty,
-      meaningful: false,
       budgetBlocked: true,
       reason: `Monthly budget cap reached ($${budget.monthlySpend.toFixed(4)}/$${budget.hardCap}). No AI calls until next month.`,
     };
@@ -91,17 +94,15 @@ export async function runOrchestrator(): Promise<OrchestratorResult> {
     revenueEvents,
     products,
   ] = await Promise.all([
-    prisma.agent.findMany({ select: { id: true, name: true, status: true } }),
+    prisma.agent.findMany({
+      select: { id: true, name: true, status: true, currentTask: true, updatedAt: true },
+    }),
     prisma.approvalRequest.count({ where: { status: "PENDING" } }),
     prisma.task.count({ where: { status: "QUEUED" } }),
-    prisma.slackMessage.count({
-      where: { createdAt: { gt: snapshot.lastCycleAt } },
-    }),
+    prisma.slackMessage.count({ where: { createdAt: { gt: snapshot.lastCycleAt } } }),
     prisma.businessIdea.count(),
     prisma.worldState.findFirst({ where: { id: "world-singleton" } }),
-    prisma.revenueEvent.count({
-      where: { occurredAt: { gt: snapshot.lastCycleAt } },
-    }),
+    prisma.revenueEvent.count({ where: { occurredAt: { gt: snapshot.lastCycleAt } } }),
     prisma.product.count(),
   ]);
 
@@ -112,29 +113,28 @@ export async function runOrchestrator(): Promise<OrchestratorResult> {
   }
 
   // Build world snapshot for milestone checks
+  const approvedIdeas = await prisma.businessIdea.count({ where: { status: "approved" } });
+  const biz = await (prisma as any).businessIdentity.findUnique({ where: { id: "biz-identity" } });
   const worldSnap: WorldSnapshot = {
     grossRevenue: Number(worldState?.grossRevenue ?? 0),
     mrr: Number(worldState?.mrr ?? 0),
     leadCount: Number(worldState?.leads ?? 0),
     websitesLaunched: Number(worldState?.websitesLaunched ?? 0),
     productCount: products,
-    approvedBusinessIdeas: await prisma.businessIdea.count({ where: { status: "approved" } }),
-    businessIdentitySet: await (async () => {
-      const biz = await (prisma as any).businessIdentity.findUnique({ where: { id: "biz-identity" } });
-      return biz?.name?.length > 0 && biz?.approvedByHuman === true;
-    })(),
+    approvedBusinessIdeas: approvedIdeas,
+    businessIdentitySet: biz?.name?.length > 0 && biz?.approvedByHuman === true,
   };
+
+  const businessStage = (worldState?.businessStage as string) ?? "DISCOVERY";
 
   // ── Step 4: Detect meaningful changes (Tier 0) ────────────────────────────
   const events: OrchestratorEvent[] = [];
   const lastStatuses = (snapshot.lastAgentStatuses as Record<string, string>) ?? {};
 
-  // Check for approval resolutions
   if (pendingApprovals !== snapshot.lastPendingApprovals) {
     events.push("approval_resolved");
   }
 
-  // Check for newly IDLE agents (previously WAITING_APPROVAL)
   for (const a of agents) {
     const prev = lastStatuses[a.id];
     if (prev === "WAITING_APPROVAL" && a.status === "IDLE") {
@@ -145,39 +145,18 @@ export async function runOrchestrator(): Promise<OrchestratorResult> {
     }
   }
 
-  // Check for new Slack messages
-  if (recentSlackMessages > 0) {
-    events.push("new_slack_message");
-  }
+  if (recentSlackMessages > 0) events.push("new_slack_message");
+  if (businessIdeas > snapshot.lastBusinessIdeaCount) events.push("business_idea_created");
+  if (revenueEvents > 0) events.push("revenue_event");
+  if (pendingTasks > snapshot.lastPendingTasks) events.push("new_task_assigned");
 
-  // Check for new business ideas
-  if (businessIdeas > snapshot.lastBusinessIdeaCount) {
-    events.push("business_idea_created");
-  }
-
-  // Check for new revenue
-  if (revenueEvents > 0) {
-    events.push("revenue_event");
-  }
-
-  // Check for new tasks
-  if (pendingTasks > snapshot.lastPendingTasks) {
-    events.push("new_task_assigned");
-  }
-
-  // Check alignment council cadence
   const msSinceCouncil = Date.now() - new Date(snapshot.lastCouncilAt).getTime();
-  if (msSinceCouncil >= COUNCIL_INTERVAL_MS) {
-    events.push("alignment_council_due");
-  }
+  if (msSinceCouncil >= COUNCIL_INTERVAL_MS) events.push("alignment_council_due");
 
-  // Check milestone advancement
   const newStage = await checkAndAdvanceMilestone(worldSnap);
-  if (newStage) {
-    events.push("milestone_reached");
-  }
+  if (newStage) events.push("milestone_reached");
 
-  // ── Step 5: Update snapshot regardless of whether we act ──────────────────
+  // ── Step 5: Update snapshot ───────────────────────────────────────────────
   await (prisma as any).orchestratorState.update({
     where: { id: "orchestrator-singleton" },
     data: {
@@ -192,15 +171,30 @@ export async function runOrchestrator(): Promise<OrchestratorResult> {
     },
   });
 
-  // ── Step 6: If nothing meaningful — exit free ─────────────────────────────
-  // De-duplicate events
+  // ── Step 6: Discovery push ────────────────────────────────────────────────
+  // In DISCOVERY with no approved business idea, proactively push active roster
+  // every 5 minutes so agents keep working toward a business decision.
   const uniqueEvents = [...new Set(events)] as OrchestratorEvent[];
+
+  if (businessStage === "DISCOVERY" && approvedIdeas === 0) {
+    const discoveryRoster = await getActiveRoster();
+    const anyAgentReady = agents.some((a) => {
+      const isPaused = (a.currentTask as string | null)?.startsWith("PAUSED:");
+      const isIdle = a.status === "IDLE";
+      const cooldownPassed =
+        Date.now() - new Date(a.updatedAt as Date).getTime() >= DISCOVERY_COOLDOWN_MS;
+      return discoveryRoster.includes(a.name as AgentName) && isIdle && !isPaused && cooldownPassed;
+    });
+
+    if (anyAgentReady && !uniqueEvents.includes("manual_trigger")) {
+      uniqueEvents.push("manual_trigger");
+    }
+  }
 
   if (uniqueEvents.length === 0) {
     return {
       ...empty,
       cycleCount,
-      meaningful: false,
       reason: "No meaningful changes detected — heartbeat only",
     };
   }
@@ -209,12 +203,12 @@ export async function runOrchestrator(): Promise<OrchestratorResult> {
   const agentsToWakeSet = new Set<AgentName>();
 
   for (const event of uniqueEvents) {
-    if (event === "alignment_council_due") continue; // Handled by /api/alignment-council cron
+    if (event === "alignment_council_due") continue;
     const targets = await resolveTargetAgents(event);
     for (const t of targets) agentsToWakeSet.add(t);
   }
 
-  // Also wake specific unblocked agents
+  // Wake specific unblocked agents by name
   for (const a of agents) {
     const prev = lastStatuses[a.id];
     if (prev === "WAITING_APPROVAL" && a.status === "IDLE") {
@@ -222,24 +216,36 @@ export async function runOrchestrator(): Promise<OrchestratorResult> {
     }
   }
 
-  // Filter to only IDLE agents in active roster (don't interrupt mid-run)
+  // Filter to IDLE, non-paused agents in active roster
   const activeRoster = await getActiveRoster();
   const idleAgentNames = new Set(
     agents
-      .filter((a) => a.status === "IDLE" && !String(a.name).startsWith("PAUSED"))
+      .filter((a) => {
+        const isPaused = (a.currentTask as string | null)?.startsWith("PAUSED:");
+        return a.status === "IDLE" && !isPaused;
+      })
       .map((a) => a.name as AgentName)
   );
 
-  const agentsToWake = [...agentsToWakeSet].filter(
-    (name) => activeRoster.includes(name) && idleAgentNames.has(name)
-  );
+  // In Discovery: also enforce the 5-min cooldown per agent
+  const agentsToWake = [...agentsToWakeSet].filter((name) => {
+    if (!activeRoster.includes(name) || !idleAgentNames.has(name)) return false;
+    if (businessStage === "DISCOVERY") {
+      const agentRecord = agents.find((a) => a.name === name);
+      const msSinceRun = agentRecord
+        ? Date.now() - new Date(agentRecord.updatedAt as Date).getTime()
+        : Infinity;
+      return msSinceRun >= DISCOVERY_COOLDOWN_MS;
+    }
+    return true;
+  });
 
   if (agentsToWake.length === 0) {
     return {
       ...empty,
       cycleCount,
       meaningful: true,
-      reason: `Events detected [${uniqueEvents.join(", ")}] but no eligible IDLE agents to wake`,
+      reason: `Events [${uniqueEvents.join(", ")}] detected — all eligible agents are busy or in cooldown`,
       events: uniqueEvents,
       milestoneReached: newStage,
     };
@@ -250,7 +256,6 @@ export async function runOrchestrator(): Promise<OrchestratorResult> {
   let totalCost = 0;
 
   for (const agentName of agentsToWake) {
-    // Re-check budget before each agent
     const currentBudget = await getBudgetStatus();
     if (currentBudget.blocked) break;
 
@@ -264,7 +269,6 @@ export async function runOrchestrator(): Promise<OrchestratorResult> {
     totalCost += cost;
   }
 
-  // Update council timestamp if alignment council fired
   if (uniqueEvents.includes("alignment_council_due")) {
     await (prisma as any).orchestratorState.update({
       where: { id: "orchestrator-singleton" },
