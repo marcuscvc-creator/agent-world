@@ -481,6 +481,198 @@ async function execDeployWebsite(agentId: string, args: ToolCallArgs): Promise<T
   });
 }
 
+async function execUpdateStrategicMemory(agentId: string, args: ToolCallArgs): Promise<ToolResult> {
+  const prisma = getPrismaClient();
+  if (!prisma) {
+    return { toolName: "update_strategic_memory", success: false, output: "Database not connected." };
+  }
+
+  const { key, value, reason } = args as { key: string; value: string; reason: string };
+
+  try {
+    const existing = await prisma.sharedStrategicMemory.findUnique({ where: { key } });
+
+    if (existing) {
+      await prisma.sharedStrategicMemory.update({
+        where: { key },
+        data: { value, updatedBy: agentId, version: { increment: 1 } },
+      });
+      return {
+        toolName: "update_strategic_memory",
+        success: true,
+        output: `Shared strategic memory updated. Key: "${key}" (version ${existing.version + 1}). Reason: ${reason}. All agents will see this change on their next tick.`,
+      };
+    } else {
+      await prisma.sharedStrategicMemory.create({
+        data: { key, value, updatedBy: agentId, version: 1 },
+      });
+      return {
+        toolName: "update_strategic_memory",
+        success: true,
+        output: `Shared strategic memory created. Key: "${key}". Reason: ${reason}. All agents will see this on their next tick.`,
+      };
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { toolName: "update_strategic_memory", success: false, output: `Failed to update strategic memory: ${message}` };
+  }
+}
+
+async function execReportResourceGap(agentId: string, args: ToolCallArgs): Promise<ToolResult> {
+  const prisma = getPrismaClient();
+  if (!prisma) {
+    return { toolName: "report_resource_gap", success: false, output: "Database not connected." };
+  }
+
+  const {
+    resourceType,
+    name,
+    reason,
+    estimatedRoi,
+    alternatives,
+    estimatedCost,
+    urgency = "medium",
+  } = args as {
+    resourceType: string;
+    name: string;
+    reason: string;
+    estimatedRoi: string;
+    alternatives: string;
+    estimatedCost?: string;
+    urgency?: string;
+  };
+
+  try {
+    // Check for existing open gap with same name to avoid duplicates
+    const existing = await prisma.resourceGap.findFirst({
+      where: { name, status: "open" },
+      select: { id: true },
+    });
+
+    if (existing) {
+      return {
+        toolName: "report_resource_gap",
+        success: true,
+        output: `Resource gap already reported (ID: ${existing.id}). "${name}" is already in the open gap list — no need to re-report. Focus on work you can do with existing resources.`,
+      };
+    }
+
+    const gap = await prisma.resourceGap.create({
+      data: {
+        reportedBy: agentId,
+        resourceType,
+        name,
+        reason,
+        estimatedRoi,
+        alternatives,
+        estimatedCost: estimatedCost ?? "",
+        urgency,
+        status: "open",
+      },
+    });
+
+    // Notify Slack (non-blocking)
+    try {
+      const { sendSlackMessage } = await import("../integrations");
+      const urgencyEmoji = urgency === "high" ? "🔴" : urgency === "medium" ? "🟡" : "🟢";
+      const text = `${urgencyEmoji} *Resource Gap Reported* by ${agentId}\n*Resource:* ${name} (${resourceType})\n*Why needed:* ${reason}\n*ROI estimate:* ${estimatedRoi}\n*Cost:* ${estimatedCost ?? "Unknown"}\n*Currently doing instead:* ${alternatives}\n*Urgency:* ${urgency}\n_Gap ID: ${gap.id}_`;
+      await sendSlackMessage({ type: "EXECUTED", text });
+    } catch {
+      // Slack is non-fatal
+    }
+
+    return {
+      toolName: "report_resource_gap",
+      success: true,
+      output: `Resource gap reported (ID: ${gap.id}). "${name}" has been flagged as ${urgency} urgency. The human founder will review and decide. Continue working with available resources in the meantime.`,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { toolName: "report_resource_gap", success: false, output: `Failed to report resource gap: ${message}` };
+  }
+}
+
+async function execUpdateBusinessIdentity(agentId: string, args: ToolCallArgs): Promise<ToolResult> {
+  const prisma = getPrismaClient();
+  if (!prisma) {
+    return { toolName: "update_business_identity", success: false, output: "Database not connected." };
+  }
+
+  const { field, value, rationale, requiresApproval = false } = args as {
+    field: string;
+    value: string;
+    rationale: string;
+    requiresApproval?: boolean;
+  };
+
+  // Major pivots (name, mission, revenue model) must go through human approval
+  const majorFields = ["name", "missionStatement", "revenueModel"];
+  const isMajorChange = majorFields.includes(field) || requiresApproval;
+
+  if (isMajorChange) {
+    return execRequestApproval(agentId, {
+      actionType: "change_price", // closest available enum for strategic business change
+      title: `Business Identity Pivot: update ${field}`,
+      summary: `${agentId} proposes updating the business identity field "${field}"`,
+      proposedAction: `Set BusinessIdentity.${field} = ${value}`,
+      reason: rationale,
+      riskLevel: "high",
+      expectedUpside: "Clearer business direction, aligned team strategy",
+      downside: "Major pivot — affects all agent behavior and public positioning",
+      exactExecution: JSON.stringify({ field, value, rationale }),
+    });
+  }
+
+  // Minor fields update immediately
+  try {
+    // Build a dynamic update object for the specific field
+    const allowedFields = [
+      "tagline", "brandVoice", "targetAudience", "customerAvatar",
+      "productOfferings", "competitiveAdvantages", "marketingStrategy",
+    ];
+
+    if (!allowedFields.includes(field)) {
+      return {
+        toolName: "update_business_identity",
+        success: false,
+        output: `Field "${field}" requires human approval (major identity change). Use requiresApproval=true or have Ada submit it via request_approval.`,
+      };
+    }
+
+    // For array fields, attempt to parse JSON; fall back to wrapping in array
+    let parsedValue: string | string[] = value;
+    if (field === "productOfferings" || field === "competitiveAdvantages") {
+      try {
+        parsedValue = JSON.parse(value) as string[];
+      } catch {
+        parsedValue = [value];
+      }
+    }
+
+    await prisma.businessIdentity.upsert({
+      where: { id: "biz-identity" },
+      create: { id: "biz-identity", [field]: parsedValue },
+      update: { [field]: parsedValue },
+    });
+
+    // Mirror to shared strategic memory so agents see the change immediately
+    await prisma.sharedStrategicMemory.upsert({
+      where: { key: `identity_${field}` },
+      create: { key: `identity_${field}`, value: value, updatedBy: agentId, version: 1 },
+      update: { value, updatedBy: agentId, version: { increment: 1 } },
+    });
+
+    return {
+      toolName: "update_business_identity",
+      success: true,
+      output: `Business identity updated. Field: "${field}" set to "${value.slice(0, 120)}${value.length > 120 ? "…" : ""}". Rationale: ${rationale}. All agents will reflect this on next tick.`,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { toolName: "update_business_identity", success: false, output: `Failed to update business identity: ${message}` };
+  }
+}
+
 // ── Dispatch ─────────────────────────────────────────────────────────────────
 
 export async function executeTool(
@@ -505,11 +697,17 @@ export async function executeTool(
       return execPostSocialMedia(agentId, args);
     case "deploy_website":
       return execDeployWebsite(agentId, args);
+    case "update_strategic_memory":
+      return execUpdateStrategicMemory(agentId, args);
+    case "report_resource_gap":
+      return execReportResourceGap(agentId, args);
+    case "update_business_identity":
+      return execUpdateBusinessIdentity(agentId, args);
     default:
       return {
         toolName,
         success: false,
-        output: `Unknown tool: "${toolName}". Available: request_approval, search_web, draft_content, log_revenue, log_expense, write_memory.`,
+        output: `Unknown tool: "${toolName}". Available: request_approval, search_web, draft_content, log_revenue, log_expense, write_memory, post_social_media, deploy_website, update_strategic_memory, report_resource_gap, update_business_identity.`,
       };
   }
 }

@@ -4,12 +4,17 @@
   "installCommand": "pnpm install",
   "regions": ["iad1"],
   "functions": {
-    "app/api/agent-tick/route.ts": { "maxDuration": 60 }
+    "app/api/agent-tick/route.ts": { "maxDuration": 60 },
+    "app/api/alignment-council/route.ts": { "maxDuration": 60 }
   },
   "crons": [
     {
       "path": "/api/agent-tick",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/alignment-council",
+      "schedule": "0 */4 * * *"
     }
   ],
   "env": {

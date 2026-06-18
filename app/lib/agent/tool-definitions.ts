@@ -295,4 +295,108 @@ export const AGENT_TOOLS: Tool[] = [
       },
     },
   },
+
+  {
+    type: "function",
+    function: {
+      name: "update_strategic_memory",
+      description:
+        "Write a key/value entry to the Shared Strategic Memory — the single source of truth visible to all agents. Use this to publish important discoveries, decisions, or strategic updates that the entire team should know about immediately. Examples: setting the business objective, updating current priorities, recording a major customer insight, flagging a market opportunity. Do NOT use for personal agent notes — use write_memory for those. Keys should be snake_case descriptive names.",
+      parameters: {
+        type: "object",
+        required: ["key", "value", "reason"],
+        properties: {
+          key: {
+            type: "string",
+            description: "Snake_case key for this memory entry. Use well-known keys when updating existing entries: business_objective, current_priorities, business_identity, weekly_objectives, monthly_objectives, active_experiments, known_risks, resource_constraints. For new discoveries use descriptive keys like 'market_insight_kids_resale' or 'customer_avatar_v2'.",
+          },
+          value: {
+            type: "string",
+            description: "The value to store. Use plain text for narrative, JSON string for structured data.",
+          },
+          reason: {
+            type: "string",
+            description: "Why you are updating this — what prompted the change and what impact it has on team strategy.",
+          },
+        },
+      },
+    },
+  },
+
+  {
+    type: "function",
+    function: {
+      name: "report_resource_gap",
+      description:
+        "Report a missing resource, tool, account, or integration that is blocking growth. Use this when you discover that Agent World lacks something required to pursue an important opportunity. The human founder will review and decide whether to approve the resource. Do NOT request resources without a clear ROI case.",
+      parameters: {
+        type: "object",
+        required: ["resourceType", "name", "reason", "estimatedRoi", "alternatives", "urgency"],
+        properties: {
+          resourceType: {
+            type: "string",
+            enum: ["social_account", "payment", "analytics", "hosting", "domain", "crm", "advertising", "email", "other"],
+            description: "Category of missing resource",
+          },
+          name: {
+            type: "string",
+            description: "Name of the specific resource needed (e.g. 'LinkedIn Company Page', 'Google Analytics', 'Reddit account')",
+          },
+          reason: {
+            type: "string",
+            description: "Why this resource is needed — what opportunity it unlocks",
+          },
+          estimatedRoi: {
+            type: "string",
+            description: "Expected return on investment (e.g. '500+ impressions/week', '$200 in additional monthly revenue', '2x conversion rate')",
+          },
+          alternatives: {
+            type: "string",
+            description: "What you are doing instead without this resource, and why that is insufficient",
+          },
+          estimatedCost: {
+            type: "string",
+            description: "Estimated cost to acquire/set up (e.g. 'Free', '$10/month', '30 min setup time')",
+          },
+          urgency: {
+            type: "string",
+            enum: ["low", "medium", "high"],
+            description: "low = nice to have, medium = would meaningfully help, high = blocking a critical path",
+          },
+        },
+      },
+    },
+  },
+
+  {
+    type: "function",
+    function: {
+      name: "update_business_identity",
+      description:
+        "Set or update the persistent Business Identity — the formal company profile all agents reference for every decision. Only Ada (CEO) should call this to establish or officially pivot the business. All other agents may propose changes via update_strategic_memory. A major pivot (changing name, mission, or revenue model) requires human approval — set requiresApproval=true for those.",
+      parameters: {
+        type: "object",
+        required: ["field", "value", "rationale"],
+        properties: {
+          field: {
+            type: "string",
+            enum: ["name", "tagline", "missionStatement", "brandVoice", "targetAudience", "customerAvatar", "productOfferings", "revenueModel", "competitiveAdvantages", "marketingStrategy"],
+            description: "Which field of the business identity to update",
+          },
+          value: {
+            type: "string",
+            description: "The new value. For array fields (productOfferings, competitiveAdvantages) provide a JSON array string.",
+          },
+          rationale: {
+            type: "string",
+            description: "Why this identity element is being set this way — the strategic reasoning",
+          },
+          requiresApproval: {
+            type: "boolean",
+            description: "Set true for major pivots (changing business name, mission, or revenue model). Minor updates (tagline wording, avatar details) can be false.",
+          },
+        },
+      },
+    },
+  },
 ];

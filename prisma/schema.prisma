@@ -206,6 +206,8 @@ model Task {
   title           String
   goal            String
   status          TaskStatus @default(QUEUED)
+  priority        String     @default("medium")  // "low"|"medium"|"high"|"critical"
+  source          String     @default("agent")   // "agent"|"system"|"human"|"alignment-council"
   toolUsed        String?
   result          String?
   approvalNeeded Boolean    @default(false)
@@ -566,4 +568,66 @@ model WorldClock {
   dayNumber Int      @default(1)
   timeOfDay Float    @default(0.5)
   updatedAt DateTime @updatedAt
+}
+
+// ── Strategic Alignment System ─────────────────────────────────────────────
+
+/// Single source of truth shared across all agents — flexible key/value store.
+model SharedStrategicMemory {
+  id        String   @id @default(cuid())
+  key       String   @unique   // e.g. "business_objective", "current_priorities", "business_identity"
+  value     String             // JSON or plain text
+  updatedBy String?            // agentId that last wrote this key
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Record of each 4-hour Alignment Council meeting.
+model AlignmentCouncil {
+  id           String   @id @default(cuid())
+  councilType  String   @default("scheduled")  // "scheduled" | "emergency"
+  summary      String                           // strategic narrative
+  agentReports Json     @default("[]")          // [{agentId, name, report, topPriority}]
+  decisions    Json     @default("[]")          // [{decision, assignee, priority, successMetric}]
+  objectives   Json     @default("[]")          // updated objectives this cycle
+  resourceGaps Json     @default("[]")          // gaps surfaced this session
+  slackTs      String?
+  createdAt    DateTime @default(now())
+}
+
+/// Persistent business identity — set once, referenced by all agents.
+model BusinessIdentity {
+  id                    String    @id @default("biz-identity")
+  name                  String    @default("")
+  tagline               String    @default("")
+  missionStatement      String    @default("")
+  brandVoice            String    @default("")
+  targetAudience        String    @default("")
+  customerAvatar        String    @default("")
+  productOfferings      Json      @default("[]")   // [{name, description, price, status}]
+  revenueModel          String    @default("")
+  competitiveAdvantages Json      @default("[]")
+  marketingStrategy     String    @default("")
+  socialProfiles        Json      @default("[]")   // [{platform, handle, url, status}]
+  establishedAt         DateTime?
+  approvedByHuman       Boolean   @default(false)
+  updatedAt             DateTime  @updatedAt
+}
+
+/// Resource gaps agents identify — missing tools, accounts, integrations.
+model ResourceGap {
+  id             String   @id @default(cuid())
+  reportedBy     String              // agentId
+  resourceType   String              // "social_account"|"payment"|"analytics"|"hosting"|"domain"|"crm"|"other"
+  name           String              // e.g. "LinkedIn Company Page"
+  reason         String              // why it's needed
+  estimatedRoi   String              // expected benefit
+  alternatives   String              // what's being done instead
+  estimatedCost  String?             // setup cost estimate
+  urgency        String   @default("medium")  // "low"|"medium"|"high"
+  status         String   @default("open")    // "open"|"approved"|"rejected"|"resolved"
+  slackTs        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
