@@ -112,7 +112,9 @@ export async function thinkAgentTurn(agentId: string): Promise<ThinkResult> {
         model,
         messages,
         tools: AGENT_TOOLS,
-        tool_choice: "auto",
+        // Round 0: force a tool call so agents always take action.
+        // Subsequent rounds: auto so the agent can stop naturally.
+        tool_choice: round === 0 ? "required" : "auto",
         temperature: 0.7,
         max_tokens: 1500,
       });
