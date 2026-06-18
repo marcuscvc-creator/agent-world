@@ -611,14 +611,14 @@ async function execUpdateBusinessIdentity(agentId: string, args: ToolCallArgs): 
 
   if (isMajorChange) {
     return execRequestApproval(agentId, {
-      actionType: "change_price", // closest available enum for strategic business change
-      title: `Business Identity Pivot: update ${field}`,
-      summary: `${agentId} proposes updating the business identity field "${field}"`,
+      actionType: "update_business_identity",
+      title: `Business Identity: set ${field}`,
+      summary: `Ada proposes setting the business identity field "${field}" — this defines what business to build.`,
       proposedAction: `Set BusinessIdentity.${field} = ${value}`,
       reason: rationale,
       riskLevel: "high",
-      expectedUpside: "Clearer business direction, aligned team strategy",
-      downside: "Major pivot — affects all agent behavior and public positioning",
+      expectedUpside: "Locks in business direction so all agents can begin building",
+      downside: "Major commitment — affects all future agent behavior and public positioning",
       exactExecution: JSON.stringify({ field, value, rationale }),
     });
   }

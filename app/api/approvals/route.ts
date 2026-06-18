@@ -60,6 +60,52 @@ export async function POST(request: Request) {
 
   if (body.decision === "approved") {
     const result = await executeSandboxAction({ ...approvalShape, status: "approved" });
+
+    // ── Business identity update: write to DB and advance world stage ──────────
+    if (approval.actionType === "update_business_identity" && result.ok) {
+      try {
+        let params: Record<string, string> = {};
+        try { params = JSON.parse(approval.exactExecution ?? "{}") as Record<string, string>; } catch { /* ignore */ }
+        const { field, value } = params;
+
+        if (field && value !== undefined) {
+          const majorFields = ["name", "missionStatement", "revenueModel"];
+          const isNameSet = field === "name";
+
+          // Upsert the specific field
+          const updateData: Record<string, unknown> = { [field]: value };
+          if (majorFields.includes(field)) {
+            updateData.approvedByHuman = true;
+            if (isNameSet) updateData.establishedAt = new Date();
+          }
+
+          await prisma.businessIdentity.upsert({
+            where: { id: "biz-identity" },
+            create: { id: "biz-identity", ...updateData },
+            update: updateData,
+          });
+
+          // Mirror to shared strategic memory
+          await prisma.sharedStrategicMemory.upsert({
+            where: { key: `identity_${field}` },
+            create: { key: `identity_${field}`, value, updatedBy: "human-approval", version: 1 },
+            update: { value, updatedBy: "human-approval", version: { increment: 1 } },
+          }).catch(() => null);
+
+          // Advance world stage to BUSINESS_CHOSEN when name is approved
+          if (isNameSet) {
+            await prisma.worldState.update({
+              where: { id: "world-singleton" },
+              data: { businessStage: "BUSINESS_CHOSEN" },
+            }).catch(() => null);
+          }
+        }
+      } catch (err) {
+        console.error("[approvals] Failed to persist business identity update:", err);
+        // Non-fatal — approval is still marked EXECUTED
+      }
+    }
+
     const updated = await prisma.approvalRequest.update({
       where: { id: body.approvalId },
       data: { status: "EXECUTED", executedAt: new Date() },

@@ -728,6 +728,20 @@ export async function executeSandboxAction(request: ApprovalRequest): Promise<Ex
       };
     }
 
+    // ── Business Identity Update (major fields: name, missionStatement, revenueModel) ──
+    // Actual DB write happens in /api/approvals/route.ts after this returns ok:true
+    case "update_business_identity": {
+      let parsed: Record<string, string> = {};
+      try { parsed = JSON.parse(request.exactExecution ?? "{}") as Record<string, string>; } catch { /* ignore */ }
+      const field = parsed.field ?? "unknown";
+      const value = parsed.value ?? "";
+      return {
+        ok: true,
+        mode: "sandbox",
+        message: `Business identity field "${field}" approved. Value: "${value.slice(0, 100)}${value.length > 100 ? "…" : ""}". DB will be updated now.`,
+      };
+    }
+
     // ── Enable Live Stripe ──
     case "enable_live_stripe": {
       return {
