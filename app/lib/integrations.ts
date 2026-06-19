@@ -316,27 +316,27 @@ export async function sendEmailViaResend(input: {
         errMsg.toLowerCase().includes("not verified") ||
         (json.name ?? "").toLowerCase().includes("validation");
       if (isDomainError) {
-        // Fallback: retry from Resend's own verified domain while custom domain verifies
-        const { ok: ok2, json: json2 } = await attemptSend(
-          input.to,
-          input.subject,
-          `<p style="font-size:11px;color:#888;border-bottom:1px solid #eee;padding-bottom:8px;margin-bottom:16px;">📬 Sent via agentworld.agency (domain verification in progress)</p>${input.html}`,
-          input.text ?? ""
-        ).catch(() => ({ ok: false, json: {} as typeof json }));
+        // Domain not yet verified — use Resend's built-in testing from address to deliver
+        // to the owner inbox while we wait for Cloudflare NS to propagate.
+        // Resend allows: from=onboarding@resend.dev → to=account owner email, in testing mode.
+        async function attemptSendResendDev(to: string, subject: string, html: string, text: string) {
+          const res2 = await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ from: "onboarding@resend.dev", to: [to], subject, html, text }),
+          });
+          const j2 = (await res2.json()) as { id?: string; error?: { message?: string }; message?: string; name?: string };
+          return { ok: res2.ok && !j2.error, json: j2 };
+        }
+
+        const redirectSubject = `[Agent World → ${input.to}] ${input.subject}`;
+        const redirectHtml = `<p style="font-size:11px;color:#888;border-bottom:1px solid #eee;padding-bottom:8px;margin-bottom:16px;">📬 Forwarded via agentworld.agency (domain verification in progress) — originally to: <strong>${input.to}</strong></p>${input.html}`;
+        const { ok: ok2, json: json2 } = await attemptSendResendDev(fallbackOwner, redirectSubject, redirectHtml, input.text ?? "").catch(() => ({ ok: false, json: {} as { id?: string; error?: { message?: string }; message?: string; name?: string } }));
         if (ok2) {
           return {
             ok: true,
             mode: "live-resend",
-            message: `Email sent to ${input.to} (subject: "${input.subject}"). Resend ID: ${(json2 as {id?: string}).id}`,
-          };
-        }
-        // If fallback also fails, try redirecting to owner
-        const { ok: ok3, json: json3 } = await attemptSend(fallbackOwner, `[Agent World] ${input.subject}`, input.html, input.text ?? "").catch(() => ({ ok: false, json: {} as typeof json }));
-        if (ok3) {
-          return {
-            ok: true,
-            mode: "live-resend",
-            message: `Email sent to owner (${fallbackOwner}) while domain verifies. Subject: "${input.subject}". Resend ID: ${(json3 as {id?: string}).id}`,
+            message: `Email forwarded to owner (${fallbackOwner}) via resend.dev while agentworld.agency domain verifies. Subject: "${input.subject}". Resend ID: ${json2.id}`,
           };
         }
         return {
