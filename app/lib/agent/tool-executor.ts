@@ -61,9 +61,14 @@ async function execRequestApproval(agentId: string, args: ToolCallArgs): Promise
 
   const normalizedRisk = riskMap[(riskLevel ?? "medium").toLowerCase()] ?? "MEDIUM";
 
+  // HARD BLOCK: update_business_identity ALWAYS requires human approval, regardless of risk level.
+  // The business name/identity is a critical decision that Marcus must personally approve.
+  const ALWAYS_HUMAN_APPROVAL = ["update_business_identity"];
+  const requiresHumanOverride = ALWAYS_HUMAN_APPROVAL.includes(actionType);
+
   // LOW and MEDIUM risk: auto-approve AND auto-execute immediately.
-  // Only HIGH and CRITICAL require human sign-off.
-  if (normalizedRisk === "LOW" || normalizedRisk === "MEDIUM") {
+  // Only HIGH and CRITICAL (or override actions) require human sign-off.
+  if ((normalizedRisk === "LOW" || normalizedRisk === "MEDIUM") && !requiresHumanOverride) {
     const record = await prisma.approvalRequest.create({
       data: {
         agentId,
