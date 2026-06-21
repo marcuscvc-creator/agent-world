@@ -81,6 +81,9 @@ export async function GET() {
  * Secured by CRON_SECRET header for Vercel cron jobs.
  */
 export async function POST(request: Request) {
+  // HARD STOP — agents are paused by owner. Remove this block when ready to reactivate.
+  return NextResponse.json({ skipped: true, reason: "All agents paused by owner. Reactivate via DB before restarting." });
+
   // Block callers that present a wrong CRON_SECRET, but allow browser POSTs (no auth header)
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
