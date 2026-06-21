@@ -19,12 +19,11 @@ export async function POST(request: Request) {
     }
   }
 
-  const result = await runOrchestrator();
-  return NextResponse.json(result);
+  // HARD STOP — agents are paused by owner. Remove this block when ready to reactivate.
+  return NextResponse.json({ skipped: true, reason: "All agents paused by owner. Reactivate via DB before restarting." });
 }
 
 export async function GET() {
-  // Allow manual GET trigger from dashboard
-  const result = await runOrchestrator();
-  return NextResponse.json(result);
+  // HARD STOP — agents are paused by owner. Remove this block when ready to reactivate.
+  return NextResponse.json({ skipped: true, reason: "All agents paused by owner. Reactivate via DB before restarting." });
 }

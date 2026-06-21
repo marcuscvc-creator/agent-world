@@ -8,16 +8,7 @@
     "app/api/agent-tick/route.ts": { "maxDuration": 300 },
     "app/api/alignment-council/route.ts": { "maxDuration": 300 }
   },
-  "crons": [
-    {
-      "path": "/api/orchestrate",
-      "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/alignment-council",
-      "schedule": "0 */6 * * *"
-    }
-  ],
+  "crons": [],
   "env": {
     "EXECUTION_MODE": "supervised_live",
     "ALLOW_REAL_WORLD_ACTIONS": "true",
