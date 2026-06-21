@@ -201,11 +201,15 @@ export async function thinkAgentTurn(agentId: string): Promise<ThinkResult> {
 
     // If approval was queued, set WAITING_APPROVAL so UI shows the right state.
     // Otherwise return to IDLE so the agent can be picked up next tick.
-    const newStatus = approvalQueued ? "WAITING_APPROVAL" : "IDLE";
-    await prisma.agent.update({
-      where: { id: agentId },
-      data: { status: newStatus },
-    });
+    // HARD STOP: never override BLOCKED status — owner may have paused agents mid-run.
+    const currentAgent = await prisma.agent.findUnique({ where: { id: agentId }, select: { status: true } });
+    if (currentAgent?.status !== "BLOCKED") {
+      const newStatus = approvalQueued ? "WAITING_APPROVAL" : "IDLE";
+      await prisma.agent.update({
+        where: { id: agentId },
+        data: { status: newStatus },
+      });
+    }
 
     // Log to AgentLog for activity feed
     const summary = toolsExecuted.length > 0
@@ -237,11 +241,14 @@ export async function thinkAgentTurn(agentId: string): Promise<ThinkResult> {
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
 
-    // Reset agent status on error
-    await prisma.agent.update({
-      where: { id: agentId },
-      data: { status: "IDLE" },
-    }).catch(() => null);
+    // Reset agent status on error — but never override BLOCKED
+    const currentAgentOnError = await prisma.agent.findUnique({ where: { id: agentId }, select: { status: true } }).catch(() => null);
+    if (currentAgentOnError?.status !== "BLOCKED") {
+      await prisma.agent.update({
+        where: { id: agentId },
+        data: { status: "IDLE" },
+      }).catch(() => null);
+    }
 
     return {
       agentId,
